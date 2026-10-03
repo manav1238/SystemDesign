@@ -134,81 +134,52 @@ Interviewer: Draw the system. I want the device tier, the edge tier, and the con
 
 Candidate: Here is the system.
 
+```mermaid
+flowchart TD
+    TV[TV / Console]
+    MW[Mobile / Web]
+    STB[Set-top Box]
+    BFF[Device BFF Layer<br/>TV BFF / Mobile BFF / Web BFF<br/>GraphQL / gRPC<br/>sign-in, profiles, rows<br/>playability, manifest, progress]
+    TEL[CLIENT TELEMETRY<br/>Scrubber + polly.js<br/>startup, rebuffer, bitrate<br/>CDN node, errors]
+    TI[Telemetry Ingest + Kafka]
+    EDGE[GLOBAL ANYCAST / EDGE ROUTER<br/>picks nearest serving PoP]
+    OC[Open Connect appliances<br/>in ISP networks ~1,000 sites]
+    X3[3rd-party CDNs<br/>Akamai, Fastly, CloudFront]
+    RCDN[Regional CDN fallback]
+    ORIGIN[ORIGIN: object storage<br/>per-title rendition ladders<br/>masters kept forever, derivatives tiered<br/>6 PB, 3x replicated]
+    MP[Media Pipeline<br/>encode -> ladder<br/>package HLS/DASH, encrypt DRM<br/>publish -> fill]
+
+    TV --> BFF
+    MW --> BFF
+    STB --> BFF
+    MW --> TEL
+    TEL --> TI
+    BFF --> EDGE
+    EDGE --> OC
+    EDGE --> X3
+    EDGE --> RCDN
+    OC --> ORIGIN
+    X3 --> ORIGIN
+    RCDN --> ORIGIN
+    MP -->|fill / replica / per-title encoding output| ORIGIN
 ```
-   DEVICES (TV / mobile / web / set-top box)   ~1B registered devices
-   +---------------+   +---------------+   +---------------+
-   | TV / Console  |   | Mobile / Web  |   | Set-top Box   |
-   +-------+-------+   +-------+-------+   +-------+-------+
-           \                  |                  /
-            \                 |                 /
-             \--------+--------+--------+--------/
-                      |                        |
-                      v                        v
-          +--------------------+   +---------------------------+
-          |  Device BFF Layer  |   |  CLIENT TELEMETRY         |
-          |  TV BFF            |   |  (Scrubber + polly.js)    |
-          |  Mobile BFF        |   |  startup, rebuffer,       |
-          |  Web BFF           |   |  bitrate, CDN node, errors|
-          |  (GraphQL/gRPC)    |   +-------------+-------------+
-          +---------+----------+                 |
-                    |  sign-in, profiles,        v
-                    |  rows, playability,  +---------------+
-                    |  manifest, progress    | Telemetry    |
-                    v                        | Ingest + Kafka|
-        =============================================================
-                                  |
-                                  v
-                    +-----------------------------+
-                    |  GLOBAL ANYCAST / EDGE ROUTER |
-                    |  picks nearest serving PoP  |
-                    +--------------+--------------+
-                                   |
-              +--------------------+------------------------+
-              |                    |                        |
-              v                    v                        v
-    +------------------+  +------------------+     +------------------+
-    |  Open Connect    |  |  3rd-party CDNs  |     |  Regional CDN    |
-    |  appliances in   |  |  Akamai, Fastly, |     |  fallback        |
-    |  ISP networks   |  |  CloudFront      |     |                  |
-    |  (~1000 sites)  |  |                  |     |                  |
-    +--------+---------+  +--------+---------+     +--------+---------+
-             |                     |                        |
-             +---------+-----------+------------------------+
-                       |  video segments (90 Tbps, app tier not in path)
-                       v
-    +--------------------------------------------------------------+
-    |  ORIGIN: object storage of per-title rendition ladders        |
-    |  masters kept forever, derivatives tiered, 6 PB, 3x replicated |
-    +--------------------------------------------------------------+
-                                  ^
-                                  |  fill, replica, per-title encoding output
-                       +--------+-------------+
-                       |  Media Pipeline      |
-                       |  encode -> ladder    |
-                       |  package HLS/DASH    |
-                       |  encrypt DRM         |
-                       |  publish -> fill     |
-                       +----------------------+
 
+REGIONAL CONTROL PLANE (x4)
 
-    ======================= REGIONAL CONTROL PLANE (x4) ==============
-                                                                   
-      +----------+   +-----------+  +---------+  +----------------+  +--------+
-      | Catalog |   |  Rows /   |  | Watch   |  | Entitlement /  |  | A/B    |
-      | Service |   | Recommend.|  | Progress|  | Licensing      |  | Server |
-      | (small, |   | (row-wise |  | Service |  | (territory,    |  |(bucket |
-      |  cached)|   |  + column)|  |         |  |  effective-dt) |  | assign)|
-      +----------+   +-----------+  +---------+  +----------------+  +--------+
-            |               |             |                |             |
-            +---------------+------+------+----------------+-------------+
-                                   |
-                    +-----------------------------+
-                    |  Sharded stores per region  |
-                    |  catalog SQL, progress KV,  |
-                    |  history KV, entitlement SQL|
-                    |  1 primary + 2 replicas,    |
-                    |  3 AZ, async cross-region  |
-                    +-----------------------------+
+```mermaid
+flowchart TD
+    CAT[Catalog Service<br/>small, cached]
+    ROW[Rows / Recommend<br/>row-wise + column]
+    WP[Watch Progress Service]
+    ENT[Entitlement / Licensing<br/>territory, effective-dt]
+    AB[A/B Server<br/>bucket assign]
+    ST[Sharded stores per region<br/>catalog SQL, progress KV,<br/>history KV, entitlement SQL<br/>1 primary + 2 replicas, 3 AZ<br/>async cross-region]
+
+    CAT --> ST
+    ROW --> ST
+    WP --> ST
+    ENT --> ST
+    AB --> ST
 ```
 
 Candidate: Three things I want to name about this diagram.
@@ -604,75 +575,51 @@ Candidate: I traded 4-second startup for reliability by starting on a conservati
 
 Candidate: The final architecture.
 
+```mermaid
+flowchart TD
+    DV[DEVICES<br/>TV | Mobile | Web]
+    ER[EDGE ROUTER<br/>anycast ~1ms<br/>scores: distance x health x presence<br/>x entitlement -> server selection]
+    OCA[Open Connect appliances<br/>~1,000 sites]
+    X3A[3rd-party CDNs<br/>fallback]
+    RCA[Regional CDN<br/>fallback]
+    OBJ[OBJECT STORAGE: per-title ladders<br/>2 PB derivatives, 200 TB masters<br/>byte-range segments, 3x replicated]
+    MP2[MEDIA PIPELINE per region<br/>per-title encode -> ladder opt<br/>package HLS/DASH -> DRM -> publish]
+
+    DV --> ER
+    ER --> OCA
+    ER --> X3A
+    ER --> RCA
+    OCA --> OBJ
+    X3A --> OBJ
+    RCA --> OBJ
+    MP2 -->|fill / install / mesh| OBJ
 ```
-                          +------------------------------------------+
-   DEVICES                |  EDGE ROUTER (anycast, ~1ms)             |
-   TV | Mobile | Web      |  scores: distance x health x presence x  |
-   |  |      |            |  entitlement tier  ->  server selection  |
-   +--+-------+-----+      +------------------------------------------+
-      |       |                    |              |              |
-      |       |                    v              v              v
-      |       |         +--------------+  +-------------+  +-------------+
-      |       |         | Open Connect |  | 3rd-party   |  | regional    |
-      |       |         | appliances    |  | CDNs       |  | CDN         |
-      |       |         | ~1,000 sites |  | (fallback) |  | (fallback)  |
-      |       |         +--------------+  +-------------+  +-------------+
-      |       |                    \              |              /
-      |       |                     +-------------+--------------+
-      |       |                                   |
-      |       |                    segments: 90 Tbps, 10-18M req/s
-      |       |                                   |  (app tier NOT in path)
-      |       |                                   v
-      |       |         +---------------------------------------+
-      |       +-------->|  OBJECT STORAGE: per-title ladders    |
-      |                 |  2 PB derivatives, 200 TB masters,     |
-      |                 |  byte-range segments, 3x replicated   |
-      |                 +-------------------+-------------------+
-      |                                     ^  fill / install / mesh
-      |                     +---------------+-------------------+
-      |                     |  MEDIA PIPELINE (per region)        |
-      |                     |  per-title encode -> ladder opt ->  |
-      |                     |  package HLS/DASH -> DRM -> publish |
-      |                     +-----------------------------------+
-      v
-   +------------------------------------------------------+
-   |  DEVICE BFFs:  TV | Mobile | Web    (per-device-class)|
-   +--------+----------------------+----------------+------+
-            |                      |                |
-            v                      v                v
-   +----------------+  +------------------+  +------------------+
-   | Entitlements   |  |  Rows / Recs     |  |  Progress Service|
-   | (territory,    |  |  row-wise rank   |  |  in-memory       |
-   |  effective-dt, |  |  + precomputed   |  |  coalescing map  |
-   |  deny-list)    |  |  column-wise     |  |  flush 30s       |
-   |                |  |  + artwork       |  |                  |
-   +----------------+  +------------------+  +------------------+
-            |                      |                |
-            |                      |    +-----------+-----------+
-            |                      |    |  A/B Server (fail to  |
-            |                      |    |  control)             |
-            |                      |    +-----------------------+
-            v                      v                v
-   +------------------------------------------------------------+
-   |  REGIONAL STORES (x4 regions)                               |
-   |  catalog SQL (replicated, ~10GB)   | progress KV 256 shards |
-   |  entitlement SQL (authoritative   | history KV (active-     |
-   |    per region)                     |   active, 2-way)       |
-   |  1 primary + 2 replicas, 3 AZ,    | multi-master OK        |
-   |  async cross-region                |                        |
-   +-------------------------------+-----------------------------+
-                                   |
-                     +-------------+--------------+
-                     v                            v
-          +--------------------+     +-----------------------+
-          | TELEMETRY INGEST   |     |  ANALYTICS LAKE        |
-          | client + server    |---->|  raw -> curated/indexed|
-          | events -> Kafka    |     |  -> experiment analysis|
-          +--------------------+     +-----------+-----------+
-                                               |
-                                               v
-                                    (feeds the ladder optimizer)
+
+```mermaid
+flowchart TD
+    DV2[DEVICES<br/>TV | Mobile | Web]
+    BFF2[DEVICE BFFs<br/>TV | Mobile | Web per-device-class]
+    EN[Entitlements<br/>territory, effective-dt, deny-list]
+    RR[Rows / Recs<br/>row-wise rank + precomputed<br/>column-wise + artwork]
+    PR[Progress Service<br/>in-memory coalescing map<br/>flush 30s]
+    AB2[A/B Server<br/>fail to control]
+    RS[REGIONAL STORES x4<br/>catalog SQL replicated ~10GB<br/>entitlement SQL authoritative per region<br/>progress KV 256 shards<br/>history KV active-active 2-way<br/>1 primary + 2 replicas, 3 AZ<br/>async cross-region, multi-master OK]
+    TI2[TELEMETRY INGEST<br/>client + server events -> Kafka]
+    LAKE[ANALYTICS LAKE<br/>raw -> curated / indexed<br/>-> experiment analysis]
+
+    DV2 --> BFF2
+    BFF2 --> EN
+    BFF2 --> RR
+    BFF2 --> PR
+    EN --> AB2
+    RR --> AB2
+    PR --> AB2
+    AB2 --> RS
+    RS --> TI2
+    TI2 --> LAKE
 ```
+
+Segments on the delivery path: 90 Tbps, 10-18M req/s — the app tier is NOT in the path. The lake feeds the ladder optimizer.
 
 Candidate: The two sentences I would leave you with. This is a bandwidth system, so 90 percent of the effort belongs on the delivery path and almost none of it belongs on the catalog, because the catalog is 10 gigabytes and fits in memory while the traffic is 90 terabits per second. And the system is deliberately two-tiered in its consistency: licensing and entitlement are hard, conservative, and fail closed, while history, progress, ranking, and analytics are fast, eventually consistent, and fail soft, because those are the things where a wrong answer costs nobody money and a slow answer costs the user everything.
 
@@ -694,3 +641,19 @@ Interviewer: Good hour. Thanks.
 - [[evaluation|Evaluation and Scoring]] for this session
 - [[06-hld-interview-checklist|HLD Interview Checklist]]
 - [[01-rapid-revision|Rapid Revision]]
+
+---
+
+## What I Must Know
+
+### Must Know
+- [[cdn|CDN]]
+- [[media-processing|Media Processing Pipeline]]
+- [[caching|Caching]]
+- [[sli-slo-sla|SLI / SLO / SLA]]
+
+### Good to Understand
+- [[compression|Compression and Serialization]]
+- [[multi-region-models|Multi-Region Models]]
+- [[geo-dns-anycast|Geo-DNS and Anycast]]
+- [[graceful-degradation|Graceful Degradation]]

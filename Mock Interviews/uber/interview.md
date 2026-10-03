@@ -347,58 +347,41 @@ Interviewer: Draw it.
 
 Candidate: Here is the whole system, grouped by scale unit, because the boundaries between these groups are the design.
 
-```
-                                 RIDER APP            DRIVER APP
-                                    |                     |
-                              HTTPS / WSS              HTTPS / WSS
-                                    |                     |
-                    +---------------+---------------------+-------------+
-                    |                GLOBAL EDGE (anycast, TLS, WAF)      |
-                    +-------------------+--------------------------------+
-                                        |
-                         Geo-DNS / global LB -> nearest region
-                                        |
-     +------------------+---------------+----------------+---------------+
-     |                  |                                |               |
-+----------+     +--------------+                 +---------------+  +------------+
-| Rider    |     | Driver BFF   |                 | Location      |  | Realtime   |
-| BFF      |     |              |                 | Ingest        |  | Gateway    |
-|          |     | avail, offers|                 |               |  |            |
-| +-------+ |     +------+-------+                 +-------+-------+  +-----+------+
-|  |ride   |            |                                 |              |  1.5M msg/s |
-|  |svc    |            |                          Kafka  driver-   |  fan-out    |
-|  +-------+ |            |                          location          |             |
-+-----+-----+            |                          (500K msg/s)       |             |
-      |                  |                                |             |             |
-      |           +------v-------+                        |             |             |
-      |           | Driver Svc   |                        |             |             |
-      |           | state + CAS  |                        |             |             |
-      |           +------+-------+                        |             |             |
-      |                  |                                |             |             |
-+-----v------------------v-----+      +-------------------v-----------v-------------+
-|            MATCHING ENGINE         |        GEOSPATIAL INDEX                    |
-|  batch per zone, score, CAS claim  |  cell -> driver ids + scoring digest       |
-|  2.5K searches/s, p99 < 1s         |  in-memory, 320MB, 3 copies             |
-+-----+--------------------------------+------------------------+--------------------+
-      |                                |                        |
-      |  +-------------+                |  +-------------+      |
-      +->| Trip Svc    |                +->| Location    |------+
-         | state machine|                   | Query Svc   |  zone -> surge
-         +------+------+                   +-------------+  batch
-                |
-       +--------+---------+---------------------------+
-       |                  |                           |
-+-------------+  +---------------+          +------------------+
-| Trip DB     |  | Money /       |          | NOTIFICATION SVC |
-| Postgres,   |  | Ledger        |          | push, SMS, FCM   |
-| strong,     |  | double-entry  |          | idempotent       |
-| 256 shards  |  +-------+-------+          +------------------+
-+-------------+          |
-                  +-------v--------+
-                  | Trip History   |
-                  | + object store |
-                  | read models    |
-                  +----------------+
+```mermaid
+flowchart TD
+    RA[RIDER APP]
+    DA[DRIVER APP]
+    GEDGE[GLOBAL EDGE<br/>anycast, TLS, WAF]
+    GLB[Geo-DNS / global LB<br/>-> nearest region]
+    RBFF[Rider BFF<br/>ride svc]
+    DBFF[Driver BFF<br/>avail, offers]
+    LI[Location Ingest<br/>Kafka driver-location<br/>500K msg/s]
+    RTG[Realtime Gateway<br/>1.5M msg/s fan-out]
+    ME[MATCHING ENGINE<br/>batch per zone, score, CAS claim<br/>2.5K searches/s, p99 < 1s]
+    GIX[GEOSPATIAL INDEX<br/>cell -> driver ids + scoring digest<br/>in-memory, 320MB, 3 copies]
+    LQ[Location Query Svc<br/>zone -> surge batch]
+    TS[Trip Svc<br/>state machine]
+    TDB[Trip DB<br/>Postgres, strong, 256 shards]
+    ML[Money / Ledger<br/>double-entry]
+    NS[NOTIFICATION SVC<br/>push, SMS, FCM, idempotent]
+    TH[Trip History<br/>+ object store read models]
+
+    RA -->|HTTPS / WSS| GEDGE
+    DA -->|HTTPS / WSS| GEDGE
+    GEDGE --> GLB
+    GLB --> RBFF
+    GLB --> DBFF
+    GLB --> LI
+    GLB --> RTG
+    LI --> GIX
+    GIX --> LQ
+    DBFF --> ME
+    RBFF --> ME
+    ME --> TS
+    TS --> TDB
+    TS --> ML
+    TS --> NS
+    ML --> TH
 ```
 
 Candidate: Read that as five independent scale units that can each be deployed and failed independently: the ingest pipeline at 500,000 messages per second, the realtime fan-out at 1.5 million messages per second, the geospatial index as a small in-memory thing, the matching engine at 2,500 searches per second, and the transactional core at 7,000 writes per second. Study separately: [[microservices|Microservices]] and [[cell-based-architecture|Cell-Based Architecture]].
@@ -514,31 +497,31 @@ Interviewer: Show me the trip state machine, and then the driver one, because I 
 
 Candidate: They are different machines over different entities and they are deliberately not the same machine.
 
-```
- TRIP
-   (none) -> CREATED -> OFFERING -> ASSIGNED -> ARRIVING -> IN_PROGRESS -> COMPLETED
-                 |           |           |            |             |
-                 |           |           |            |             +-> DISPUTED
-                 |           |           |            +-> CANCELLED_BY_RIDER
-                 |           |           |            +-> CANCELLED_BY_DRIVER
-                 |           |           +-> ARRIVED
-                 |           +-> OFFER_EXPIRED -> (back to CREATED, retry)
-                 +-> PAYMENT_FAILED
-                                              +-> CANCELLED_BY_RIDER (pre-pickup, fee applies)
-                                              +-> EXPIRED (no driver in window)
+```mermaid
+stateDiagram-v2
+    [*] --> CREATED
+    CREATED --> OFFERING
+    OFFERING --> ASSIGNED
+    ASSIGNED --> ARRIVING
+    ARRIVING --> IN_PROGRESS
+    IN_PROGRESS --> COMPLETED
+    OFFERING --> CANCELLED: declined
+    ASSIGNED --> CANCELLED: no driver
+    IN_PROGRESS --> CANCELLED
+    COMPLETED --> [*]
 ```
 
 Candidate: The rules that people get wrong. First, `COMPLETED` is terminal, and a dispute is a separate machine layered on top, not a trip state, because a dispute can apply to a completed trip days later. Second, a rider cancellation before `ARRIVED` costs a fee and a cancellation after `ARRIVED` costs nothing, and the branch point is a system-observed event, not a client assertion. Third, `OFFER_EXPIRED` is not an error, it is the normal retry path, and it must not consume the rider's "no driver found" budget.
 
-```
- DRIVER
-   OFFLINE -> ONLINE_IDLE -> OFFERING -> ONLINE_IDLE
-                            |  \
-                            |   +-> OFFLINE (declined all, or went offline)
-                            +-> ON_TRIP -> OFFERING -> ON_TRIP
-                                          |
-                                          +-> ONLINE_IDLE
-   any -> SUSPENDED (compliance, deactivation)   terminal until appeal
+```mermaid
+stateDiagram-v2
+    [*] --> OFFLINE
+    OFFLINE --> ONLINE_IDLE
+    ONLINE_IDLE --> OFFERING
+    OFFERING --> ONLINE_IDLE: declined / expired
+    OFFERING --> TRIP_ASSIGNED
+    TRIP_ASSIGNED --> ONLINE_IDLE
+    ONLINE_IDLE --> [*]
 ```
 
 Candidate: The invariant linking them: a driver has at most one `current_trip_id`, and a trip has at most one `driver_id`. Enforced by the CAS on `driver_state` plus the unique constraint on the assignment, and both are database invariants so they hold through a crash. And `SUSPENDED` is important to name, because a suspended driver with a live `current_trip_id` is a real operational state and the system has to decide what happens to their passenger. Study separately: [[event-types|Event Types]] and [[idempotent-consumer|Idempotent Consumer]].
@@ -656,3 +639,19 @@ Interviewer: That's a good session. You asked about the offer exclusivity, which
 - Rider-side realtime fan-out: [[websockets]], [[tail-latency|Tail Latency]]
 - Primary death, replica lag, and fencing: [[failover|Failover]], [[replication-lag|Replication Lag]], [[split-brain|Split Brain]]
 - Location history at scale: [[time-series-at-scale|Time Series at Scale]], [[data-warehouse-lake|Data Warehouse / Lake]]
+
+---
+
+## What I Must Know
+
+### Must Know
+- [[websockets|WebSockets]]
+- [[shard-routing|Shard Routing]]
+- [[database-indexing|Database Indexing]]
+- [[distributed-locks|Distributed Locks]]
+
+### Good to Understand
+- [[hotspot-handling|Hotspot Handling]]
+- [[time-series-at-scale|Time Series at Scale]]
+- [[tail-latency|Tail Latency]]
+- [[cell-based-architecture|Cell-Based Architecture]]

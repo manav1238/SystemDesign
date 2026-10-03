@@ -110,50 +110,29 @@ Candidate: The redirect response itself is tiny, maybe 300 bytes with headers. A
 
 Candidate: Here is the architecture. The single most important structural decision is that I split the system into a control plane and a data plane. The create path is the control plane and can be slow, can queue, and can depend on a database. The redirect path is the data plane and must be fast, stateless, and must never depend on a synchronous write.
 
-```
-                                 Global DNS / Anycast
-                                          |
-                            +-------------+-------------+
-                            |      Edge LB (multi PoP)   |  TLS termination, HTTP/3
-                            +-------------+-------------+
-                                          |
-                       +------------------+------------------+
-                       |                                     |
-              +--------v--------+                   +--------v--------+
-              |  Redirect Svc   |                   |  Create API     |
-              |  (data plane)   |                   |  (control plane)|
-              |  stateless      |                   |  auth, abuse    |
-              +--------+--------+                   +--------+--------+
-                       |                                     |
-              +--------v---------+                  +---------v----------+
-              |  L1 local cache  |                  |  Key allocator /  |
-              |  (hot keys only) |                  |  key pool manager |
-              +--------+---------+                  +---------+----------+
-                       |                                     |
-              +--------v-------------------------------------v----------+
-              |              Redis Cluster (cache layer)                 |
-              |   key: short_code -> {long_url, expires_at}, TTL=expiry |
-              |   per-shard Bloom filter of valid codes                |
-              |   per-shard top-K hot codes in local memory            |
-              +---------------------------+----------------------------+
-                                          | cache miss, bloom-negative short-circuit
-              +---------------------------v----------------------------+
-              |         Sharded URL store (MySQL/Aurora)                |
-              |   PK short_code, index (owner_id, created_at)          |
-              |   primary + 2 read replicas per shard, multi-AZ        |
-              |   soft delete / expire, never hard delete on the path  |
-              +---------------------------+----------------------------+
-                                          | async, best effort, lossy
-              +---------------------------v----------------------------+
-              |   Ingest tier (Kafka) -> Flink aggregator             |
-              |   -> ClickHouse / HBase  keyed by (code, hour)         |
-              |   -> daily rollups, top-K, public stats endpoint       |
-              +--------------------------------------------------------+
-                                          |
-              +---------------------------v----------------------------+
-              |  Safety / threat-intel service (unfurl, malware scan)  |
-              |  link starts in QUARANTINED, flips to ACTIVE           |
-              +--------------------------------------------------------+
+```mermaid
+flowchart TD
+    DNS[Global DNS / Anycast]
+    ELB[Edge LB multi PoP<br/>TLS termination, HTTP/3]
+    RS[Redirect Svc<br/>data plane, stateless]
+    CA[Create API<br/>control plane, auth, abuse]
+    L1[L1 local cache<br/>hot keys only]
+    KA[Key allocator / key pool manager]
+    RD[Redis Cluster cache layer<br/>key: short_code -> {long_url, expires_at}, TTL=expiry<br/>per-shard Bloom filter of valid codes<br/>per-shard top-K hot codes in local memory]
+    ST[Sharded URL store MySQL / Aurora<br/>PK short_code, index owner_id created_at<br/>primary + 2 read replicas per shard, multi-AZ<br/>soft delete / expire, never hard delete on path]
+    ING[Ingest tier Kafka -> Flink<br/>-> ClickHouse / HBase keyed by code-hour<br/>-> daily rollups, top-K, public stats endpoint]
+    SAF[Safety / threat-intel<br/>unfurl, malware scan<br/>link starts QUARANTINED -> ACTIVE]
+
+    DNS --> ELB
+    ELB --> RS
+    ELB --> CA
+    RS --> L1
+    CA --> KA
+    L1 --> RD
+    KA --> RD
+    RD -->|cache miss, bloom-negative short-circuit| ST
+    ST -->|async, best effort, lossy| ING
+    ST --> SAF
 ```
 
 Interviewer: Walk me through the read path for a resolution, step by step, including what happens on a miss.
@@ -411,3 +390,19 @@ Candidate: Study separately: [[normalization-vs-denormalization|Normalization vs
 Candidate: Study separately: [[cap-theorem|CAP Theorem]] — I chose to give up availability for the write path and eventual consistency for the read path, and I should be able to argue that as a deliberate PACELC trade rather than a slogan.
 
 Candidate: Study separately: [[cdn|CDN]] — I explicitly chose not to edge-cache the 302 by default, and I need the reasoning for cache key design and TTL to be sharper.
+
+---
+
+## What I Must Know
+
+### Must Know
+- [[caching|Caching]]
+- [[sharding|Sharding]] and [[shard-key|Shard Key]]
+- [[consistent-hashing|Consistent Hashing]]
+- [[redis|Redis]]
+
+### Good to Understand
+- [[probabilistic-data-structures|Probabilistic Data Structures]]
+- [[database-replication|Database Replication]]
+- [[http-caching|HTTP Caching]]
+- [[capacity-estimation|Capacity Estimation]]

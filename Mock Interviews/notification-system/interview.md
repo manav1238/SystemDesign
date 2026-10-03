@@ -189,72 +189,58 @@ production, stage two is the orchestrator that decides and renders, stage three 
 senders, stage four is the provider gateway layer, plus a feedback path for delivery status.
 
 **Candidate:**
-```text
-+-------------+   +-------------+   +-------------+
-| order svc   |   | social svc  |   | auth svc   |     STAGE 1
-+------+------+   +------+------+   +------+------+   producers
-       |  emit domain event (order.shipped, comment.created)
-       v
-+---------------------------------------------------------------+
-|                    EVENT BUS  (Kafka, partitioned by tenant)   |
-|   durable, replayable, ordered within a partition, fan-out     |
-+----+---------------------+--------------------+---------------+
-     |                     |                    |
-     v                     v                    v
-+---------------------------------------------------------------+
-|              STAGE 2: NOTIFICATION ORCHESTRATOR                |
-|  +--------------+  +-------------+  +---------------+            |
-|  | recipient    |  | preference  |  | dedupe +      |            |
-|  | resolver     |->| + urgency   |->| quiet hours   |            |
-|  | (fan-out)    |  | evaluator   |  | (suppress?)   |            |
-|  +--------------+  +------+------+  +-------+-------+            |
-|                              |                  |            |
-|                              v                  v            |
-|                    +----------------+   +---------------+     |
-|                    | template       |   | batcher /     |     |
-|                    | builder + cache|   | digest scheduler|    |
-|                    +--------+-------+   +-------+-------+     |
-+-----------------------------+--------------------+-------------+
-                              |                    |
-          +-------------------+                    |
-          v                                        v
-   +------+-------------------+          +---------+----------+
-   |  QUEUE PER CHANNEL         |         |  DIGEST QUEUE     |
-   |  push | email | sms        |         |  (scheduled)      |
-   |  + priority class         |         +---------+----------+
-   +---+----------+------------+                   |
-       |          |            |                     |
-  +----v---+ +----v----+ +----v-----+         +-----v------+
-  | Push   | | Email   | | SMS      |         |  Digest    |
-  | Sender | | Sender  | | Sender   |         |  Builder   |
-  +---+----+ +---+----+ +----+-----+         +-----+------+
-      |          |            |                    |
-      +-----+----+------------+--------------------+
-            v
-  +---------------------------------------------------------+
-  |  STAGE 4: PROVIDER GATEWAY LAYER                          |
-  |  rate limiter (token bucket per provider)                 |
-  |  circuit breaker per provider                             |
-  |  provider failover + channel fallback                     |
-  |  idempotency key on every outbound call                   |
-  +------------------------+--------------------------------+
-                           |
-              +------------v-------------+-------------+
-              |  APNs  |  FCM  |  Email ESP  |  SMS GW  |
-              +----------+----------+----------+---------+
-                           |
-                           v
-                    +--------------+
-                    |  Provider    |
-                    |  webhooks /  |
-                    |  postbacks   |
-                    +------+-------+
-                           |
-                           v   (feedback / status)
-                    +--------------+
-                    | delivery log  |
-                    | status store  |
-                    +--------------+
+```mermaid
+flowchart TD
+    OS[Order svc]
+    SO[SOCIAL svc]
+    AU[AUTH svc]
+    EB[EVENT BUS Kafka<br/>partitioned by tenant<br/>durable, replayable<br/>ordered within partition, fan-out]
+    RES[Recipient resolver<br/>fan-out]
+    PRE[Preference +<br/>urgency evaluator]
+    DED[Dedupe + quiet hours<br/>suppress?]
+    TPL[Template builder + cache]
+    BAT[Batching / digest scheduler]
+    QP[QUEUE PER CHANNEL<br/>push | email | sms<br/>+ priority class]
+    DQ[DIGEST QUEUE<br/>scheduled]
+    PS[Push Sender]
+    ES[Email Sender]
+    SS[SMS Sender]
+    DB[Digest Builder]
+    PG[STAGE 4: PROVIDER GATEWAY<br/>token bucket per provider<br/>circuit breaker per provider<br/>provider failover + channel fallback<br/>idempotency key on every outbound call]
+    APN[APNs]
+    FCM[FCM]
+    ESP[Email ESP]
+    SMSG[SMS Gateway]
+    PH[Provider webhooks / postbacks]
+    DL[Delivery log / status store]
+
+    OS -->|domain event| EB
+    SO -->|domain event| EB
+    AU -->|domain event| EB
+    EB --> RES
+    RES --> PRE
+    PRE --> DED
+    PRE --> TPL
+    DED --> BAT
+    TPL --> QP
+    BAT --> DQ
+    QP --> PS
+    QP --> ES
+    QP --> SS
+    DQ --> DB
+    PS --> PG
+    ES --> PG
+    SS --> PG
+    DB --> PG
+    PG --> APN
+    PG --> FCM
+    PG --> ESP
+    PG --> SMSG
+    APN --> PH
+    FCM --> PH
+    ESP --> PH
+    SMSG --> PH
+    PH -->|feedback / status| DL
 ```
 
 **Candidate:** Three things in that diagram carry the design. First, the two asynchronous
@@ -968,3 +954,19 @@ runs out.
 - [[tenancy-and-cells]] for weighted fair queueing so one tenant cannot starve others
 - Study separately: Push Notifications (APNs/FCM gateways), APNs token lifecycle, and ESP
   complaint and bounce reputation management
+
+---
+
+## What I Must Know
+
+### Must Know
+- [[message-queue|Message Queue]]
+- [[event-driven-architecture|Event-Driven Architecture]]
+- [[outbox-pattern|Outbox Pattern]]
+- [[retry-and-timeout|Retry and Timeout]]
+
+### Good to Understand
+- [[delivery-and-retry|Delivery and Retry]]
+- [[idempotent-consumer|Idempotent Consumer]]
+- [[circuit-breaker|Circuit Breaker]]
+- [[rate-limiter|Rate Limiter]]

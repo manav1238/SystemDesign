@@ -907,3 +907,19 @@ by horizontal scale on gateway nodes, and by backpressure that sacrifices
 notification latency but never message correctness.
 
 Interviewer: That is the design I would build. Thank you.
+
+---
+
+## What I Must Know
+
+### Must Know
+- [[websockets|WebSockets]]
+- [[sticky-sessions|Sticky Sessions]]
+- [[delivery-semantics|Delivery Semantics]]
+- [[encryption-and-keys|Encryption and Keys]]
+
+### Good to Understand
+- [[backpressure|Backpressure]]
+- [[load-shedding|Load Shedding]]
+- [[adversarial-reliability|Adversarial Reliability]]
+- [[crdt|CRDTs]]

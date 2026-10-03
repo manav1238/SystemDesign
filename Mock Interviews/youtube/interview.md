@@ -146,60 +146,42 @@ Interviewer: Draw the system. And I want you to make the upload path and the pla
 
 Candidate: Here is the whole system.
 
-```
-                                    +--------------------------------------+
-                                    |            GLOBAL ANYCAST / DNS       |
-                                    +-----------------+--------------------+
-                                                      |
-        +---------------------------------------------┴--------------------------+
-        |                                                                        |
-        v                                                                        v
-+-------------------------------+                        +---------------------------------------+
-|        UPLOAD PATH            |                        |            PLAYBACK PATH              |
-|  (write-heavy, async)         |                        |  (read-heavy, 150x the traffic)        |
-+-------------------------------+                        +---------------------------------------+
-        |                                                                        |
-        v                                                                        v
-+-------------------------------+      +---------------------+     +-----------------------------+
-|   Upload API Service          |----->|   Object Storage    |     |        CDN Edge POPs         |
-|  (auth, multipart, resume)    |      |  masters + renditions|     |   (immutable, long TTL)     |
-|  + API Gateway + Rate Limit  |      +----------+----------+     +--------------+--------------+
-+-------------------------------+                 |                              |
-        |                                         | origin fill                   | manifest + segments
-        | enqueue VideoUploaded                  | (small % of requests)        v
-        v                                         |                    +--------+----------+
-+------------------+                             |                    | Playback / Video  |
-|  Message Queue   |                             +--------------------|  Metadata Service  |
-| topic: uploads   |                                              +--------+----------+
-+---+----------+---+                                                      |
-    |          |                                                          v
-    v          v                                              +-----------+------------+
-+---------+  +-------------------------------------------------------+
-| Transcode|  |  Control-Plane Stores (all sharded SQL)               |
-| Worker  |  |  +-----------+ +------------+ +--------+ +----------+  |
-| Pool    |  |  | Video Meta| | Comments   | | Subs   | | Users/   |  |
-| (auto-  |  |  | (video_id)| | (video_id)| |(sub_id) | | Auth     |  |
-| scaled) |  |  +-----------+ +------------+ +--------+ +----------+  |
-+---------+  |  +-----------+ +------------+ +--------+ +----------+  |
-             |  | Uploads   | | View Ctrs  | | Feed   | | Search  |  |
-             |  | (user_id) | | (video_id) | |        | | Index   |  |
-             |  +-----------+ +------------+ +-------- +----------+  |
-             +-------------------------------------------------------+
-                                |                    |
-        +-----------------------+                    +---------------------+
-        |  Event bus: view events, upload events,        |  Async consumers:
-        |  comment events, like events                   |  counters, search
-        |  (Kafka)                                      |  indexer, trending,
-        v                                              |  recommendations
-+-------------------+   +------------------+   +--------------------+   +--------------------+
-| Counter Service  |-->| Search Index    |-->| Trending /         |-->| Recommendation    |
-| (batched writes) |   | (Elasticsearch)  |   | Popularity Service |   | Cache (precomputed)|
-+-------------------+   +------------------+   +--------------------+   +--------------------+
-        |
-        v
-+-------------------+
-| Analytics / Lake  |  (watch events, for creators + offline models)
-+-------------------+
+```mermaid
+flowchart TD
+    GA[GLOBAL ANYCAST / DNS]
+    UP[UPLOAD PATH<br/>write-heavy, async]
+    PB[PLAYBACK PATH<br/>read-heavy, 150x the traffic]
+    UAPI[Upload API Service<br/>auth, multipart, resume<br/>+ API Gateway + Rate Limit]
+    OBJ[Object Storage<br/>masters + renditions]
+    MQ[Message Queue<br/>topic: uploads]
+    TW[Transcode Worker Pool<br/>auto-scaled]
+    EDGE[CDN Edge POPs<br/>immutable, long TTL]
+    PM[Playback / Video Metadata Service]
+    CPS[Control-Plane Stores, all sharded SQL<br/>Video Meta video_id, Comments video_id<br/>Subs sub_id, Users / Auth<br/>Uploads user_id, View Ctrs video_id<br/>Feed, Search Index]
+    BUS[Event bus Kafka<br/>view / upload / comment / like events]
+    CS[Counter Service<br/>batched writes]
+    SI[Search Index<br/>Elasticsearch]
+    TP[Trending / Popularity Service]
+    RC[Recommendation Cache<br/>precomputed]
+    LAKE[Analytics / Lake<br/>watch events, creators + offline models]
+
+    GA --> UP
+    GA --> PB
+    UP --> UAPI
+    UAPI --> OBJ
+    UAPI -->|enqueue VideoUploaded| MQ
+    MQ --> TW
+    PB --> EDGE
+    EDGE -->|manifest + segments| PM
+    OBJ -->|origin fill, small % of requests| EDGE
+    PM --> CPS
+    TW --> CPS
+    CPS --> BUS
+    BUS --> CS
+    BUS --> SI
+    BUS --> TP
+    BUS --> RC
+    CS --> LAKE
 ```
 
 Candidate: Let me name the split, because it is the single most important structural idea here. The data plane is the bytes: upload to object storage, playback from CDN. The control plane is the metadata: what exists, who owns it, what it counts, how it ranks. The data plane is a handful of extremely well-understood, mostly-horizontal components. The control plane is where all the sharding, caching, and consistency reasoning lives.
@@ -371,20 +353,21 @@ Candidate: The design principle is that transcoding is slow, bursty, CPU-heavy, 
 
 Candidate: Architecture in detail.
 
-```
-  +----------+   VideoUploaded    +------------------+   claim   +------------------+
-  | Upload   |------------------>| Message Queue     |---------->| Transcode Worker  |
-  | Service  |   (durability = S  | topic:            |  lease   |  pool (K8s, HPA)  |
-  +----------+    3 replicas)     | video.transcode   |<---------|  1 job at a time  |
-                                 +------------------+  ack      +--------+---------+
-                                          |                            |            |
-                                          | RenditionReady            | read      | write
-                                          v                            v            v
-                                 +------------------+          +---------+----+ +----+--------+
-                                 | Transcode State  |          |  Object Store | | Object Store |
-                                 | (sharded SQL/    |          |   masters     | |  renditions  |
-                                 |  per-video row)  |          +---------------+ +-------------+
-                                 +------------------+
+```mermaid
+flowchart TD
+    US[Upload Service]
+    MQ[Message Queue<br/>topic: video.transcode]
+    TW[Transcode Worker Pool<br/>K8s, HPA, 1 job at a time]
+    TS[Transcode State<br/>sharded SQL, per-video row]
+    OM[Object Store<br/>masters]
+    OR[Object Store<br/>renditions]
+
+    US -->|VideoUploaded, durability = S3 replicas| MQ
+    MQ -->|claim / lease| TW
+    TW -->|ack| MQ
+    MQ -->|RenditionReady| TS
+    TW -->|read| OM
+    TW -->|write| OR
 ```
 
 Candidate: Why a queue and not an HTTP callback: the queue is durable, so if every worker dies the jobs are still there. A callback to a dead worker loses work. Why a queue and not synchronous: a 1080p-to-8-rendition transcode takes 20 to 60 CPU-minutes. You cannot do that in an HTTP request.
@@ -467,34 +450,21 @@ Candidate: Naive design: 70,000 view requests per second all hit the database. T
 
 Candidate: My design, in three tiers.
 
-```
- 70K views/s
-     |
-     v
- +-------------------+
- |  Redis in-memory  |  shard key: vc:{videoId}
- |  INCR by 1       |  ~ 100K keys in hot window, a few GB
- +--------+----------+
-          | every 10s, batched
-          v
- +-------------------+
- |   Counter Service |  6,000 writes/s, merges shards
- |   (stateless)     |
- +--------+----------+
-          | upsert 1-min buckets
-          v
- +-------------------+
- | Sharded SQL      |  durable, exact per minute
- +--------+----------+
-          | every 60s, or on threshold
-          v
- +-------------------+
- | view_counters_   |  denormalized, serves the read path
- |    current        |
- +------------------+
+```mermaid
+flowchart TD
+    V70[70K views/s]
+    RED[Redis in-memory<br/>INCR by 1<br/>shard key vc:{videoId}<br/>~100K keys in hot window, a few GB]
+    CTR[Counter Service<br/>6,000 writes/s, merges shards]
+    SQL[Sharded SQL<br/>durable, exact per minute]
+    CUR[view_counters_current<br/>denormalized, serves the read path]
 
- Side channel: every view event also -> Kafka -> Analytics Lake
+    V70 --> RED
+    RED -->|every 10s, batched| CTR
+    CTR -->|upsert 1-min buckets| SQL
+    SQL -->|every 60s, or on threshold| CUR
 ```
+
+Side channel: every view event also -> Kafka -> Analytics Lake
 
 Candidate: The 10-second batch is the key number. It divides 70,000 writes per second by 10, giving 7,000 batched upserts, and it caps the data loss window at 10 seconds on a hard crash. I consider 10 seconds of lost view counts completely acceptable for a number that is displayed as "1.2 billion views" anyway. If a crash loses 700,000 views, nobody notices and no user is harmed.
 
@@ -782,60 +752,41 @@ Candidate: And what I would not trade: playback availability, and the immutabili
 
 Candidate: The final architecture.
 
-```
-                                 GLOBAL EDGE
-                    +--------------------------------+
-                    |  DNS / Anycast / Global LB      |
-                    +---------------+----------------+
-                                    |
-      +-----------------------------+-----------------------------+
-      |                                                           |
-      v                                                           v
-  +-----------+                                          +--------v---------+
-  | UPLOADS   |  460 rps                                 | CDN EDGE         |
-  +-----+-----+  (bypass my servers for bytes)           | 99%+ hit ratio   |
-        |                                                   | 85 Tbps out     |
-        v                                                   +--------+---------+
-  +-----+-----------+      +----------------+                            |
-  | Upload Service  |----->| Object Storage |----------------------------+
-  | + rate limiter  |      |  masters       |  origin fill (small %)
-  +-----+-----------+      |  renditions    |
-        |                  |  manifests     |
-        | outbox           |  tiers + EC    |
-        v                  +----------------+
-  +------------------+            ^
-  | Message Queue    |            | CDN-managed
-  | video.transcode  |            | video protection,
-  +---+----------+---+            | signed URLs, DRM
-      |          |
-      v          v
-  +----------+  +----------------------+
-  | Transcode|  |  Kafka: events       |
-  | Workers  |  |  video / view /     |
-  | HPA on   |  |  comment / like     |
-  | queue    |  +--+----+----+----+--+
-  | depth    |     |    |    |    |
-  +----------+     v    v    v    v
-              +--------+ +-------+ +-----------+ +-----------+
-              |Counter | |Search | | Trending  | Recommend- |
-              |Service | |Index  | | Service   | ation      |
-              +---+----+ +-------+ +-----+-----+ +-----+-----+
-                  |            |           |             |
-                  v            v           v             v
-            +----------------------------------------------------+
-            |  SHARDED CONTROL PLANE (Relational + Wide-column)      |
-            |  videos(64) comments(32) counters(16) users(8)        |
-            |  subs(16, sub_id) feed(16, user_id) uploads(16)       |
-            |  1 primary + 2 replicas per shard, 3 AZ, multi-region  |
-            |  Redis: meta cache, counter slices(64/video), recs    |
-            +--------------------+-----------------------------------+
-                                 |
-                                 v
-                        +-------------------+
-                        | Analytics Lake    |
-                        | (watch events,    |
-                        | creator Studio)   |
-                        +-------------------+
+```mermaid
+flowchart TD
+    GE[GLOBAL EDGE<br/>DNS / Anycast / Global LB]
+    UP[UPLOADS, 460 rps<br/>bypass my servers for bytes]
+    US[Upload Service<br/>+ rate limiter]
+    OBJ[Object Storage<br/>masters, renditions, manifests<br/>tiers + EC]
+    MQ[Message Queue<br/>video.transcode]
+    TW[Transcode Workers<br/>HPA on queue depth]
+    EDG2[CDN EDGE<br/>99%+ hit ratio, 85 Tbps out]
+    KAF[Kafka: events<br/>video / view / comment / like]
+    CTR[Counter Service]
+    SIX[Search Index]
+    TR[Trending Service]
+    REC[Recommendation]
+    CP[SHARDED CONTROL PLANE<br/>Relational + Wide-column<br/>videos 64, comments 32, counters 16, users 8<br/>subs 16 sub_id, feed 16 user_id, uploads 16<br/>1 primary + 2 replicas per shard, 3 AZ<br/>multi-region<br/>Redis: meta cache, counter slices 64/video, recs]
+    AL[Analytics Lake<br/>watch events, creator Studio]
+
+    GE --> UP
+    GE --> EDG2
+    UP --> US
+    US --> OBJ
+    US -->|outbox| MQ
+    MQ --> TW
+    OBJ -->|origin fill, small %| EDG2
+    EDG2 -->|CDN-managed video protection, signed URLs, DRM| OBJ
+    TW --> KAF
+    KAF --> CTR
+    KAF --> SIX
+    KAF --> TR
+    KAF --> REC
+    CTR --> CP
+    SIX --> CP
+    TR --> CP
+    REC --> CP
+    CP --> AL
 ```
 
 Candidate: If you want the two sentences: video bytes bypass my application servers entirely, going client to object storage on upload and CDN to client on playback, which is what lets a system handle 85 terabits per second with 70,000 requests per second of application load; and the application layer is a sharded control plane of per-data-type stores, whose read path is cache-first, whose write path is asynchronous, and whose consistency is chosen per operation rather than declared once for the whole system.
@@ -858,3 +809,20 @@ Interviewer: That's a good hour. Thank you.
 - [[evaluation|Evaluation and Scoring]] for this session
 - [[06-hld-interview-checklist|HLD Interview Checklist]]
 - [[01-rapid-revision|Rapid Revision]]
+
+---
+
+## What I Must Know
+
+### Must Know
+- [[cdn|CDN]]
+- [[media-processing|Media Processing Pipeline]]
+- [[blob-storage|Blob Storage]]
+- [[caching|Caching]]
+- [[sharding|Sharding]]
+
+### Good to Understand
+- [[compression|Compression and Serialization]]
+- [[storage-tiering|Storage Tiering]]
+- [[probabilistic-data-structures|Probabilistic Data Structures]]
+- [[strong-vs-eventual-consistency|Strong vs Eventual Consistency]]

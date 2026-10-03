@@ -88,56 +88,30 @@ Candidate: A fixed window allows double the limit across a boundary. At 100 per 
 
 Candidate: Here is the design. The key idea is three tiers, and the tiers exist to solve the 300,000 requests per second problem without a round trip per request.
 
-```
-              +------------------------------------------------+
-              |  Edge: WAF / DDoS scrubbing / IP reputation     |
-              |  coarse volumetric block before anything else   |
-              +----------------------+-------------------------+
-                                     |
-              +----------------------v-------------------------+
-              |  L7 Load Balancer (Envoy / nginx / CDN)         |
-              |  hard connection cap + overload protection     |
-              +----------------------+-------------------------+
-                                     |
-     +-------------------------------+-------------------------------+
-     |                               |                               |
-+----v---------+          +---------v--------+             +--------v--------+
-| L1 local     |          | Service A        |             | Service B        |
-| limiter      |          | middleware       |             | middleware       |
-| leased quota |          +---------+--------+             +---------+---------+
-| + hot-key    |                    |                              |
-| guard        |                    |  shared client lib / sidecar |
-+-----+---------+          +---------v----------------------------v-+
-      |                      |
-      |        +-------------+--------------+
-      |        |  Limiter core (Go lib or  |
-      |        |  small service)           |
-      |        |  - resolve key(s)         |
-      |        |  - tier lookup + weights  |
-      |        |  - token bucket / GCRA   |
-      |        |  - 5ms hard timeout      |
-      |        |  - circuit breaker        |
-      |        +-------------+-------------+
-      |                      | EVAL (atomic refill+check+decrement)
-      |        +-------------v--------------+
-      |        |  Redis Cluster, 24 shards|
-      |        |  hash-tagged keys        |
-      |        |  rl:{tier}:{scope}:{id}  |
-      |        |  TTL = window            |
-      |        +-------------+-------------+
-      |                      |
-      |        +-------------v--------------+
-      |        |  Policy config store      |
-      |        |  (pushed, 60s propagation)|
-      |        +---------------------------+
-      |
-  fail-open / fail-closed decision, per route:
-      |
-  +---v--------------------------------------------+
-  |  Degraded local limiter:                        |
-  |  conservative quota = global_limit / N_instances |
-  |  serves traffic when Redis is unreachable      |
-  +------------------------------------------------+
+```mermaid
+flowchart TD
+    EDGE[Edge: WAF / DDoS scrubbing / IP reputation<br/>coarse volumetric block before anything else]
+    LB[L7 Load Balancer<br/>Envoy / nginx / CDN<br/>hard connection cap + overload protection]
+    L1[L1 local limiter<br/>leased quota + hot-key guard]
+    SA[Service A middleware]
+    SB[Service B middleware]
+    LIB[shared client lib / sidecar]
+    CORE[Limiter core: Go lib / small service<br/>resolve keys, tier lookup + weights<br/>token bucket / GCRA, 5ms hard timeout<br/>circuit breaker]
+    RD[Redis Cluster, 24 shards<br/>hash-tagged keys rl:{tier}:{scope}:{id}<br/>TTL = window]
+    POL[Policy config store<br/>pushed, 60s propagation]
+    DEG[Degraded local limiter<br/>conservative quota = global_limit / N_instances<br/>serves traffic when Redis unreachable]
+
+    EDGE --> LB
+    LB --> L1
+    LB --> SA
+    LB --> SB
+    SA --> LIB
+    SB --> LIB
+    L1 --> CORE
+    LIB --> CORE
+    CORE -->|EVAL atomic refill + check + decrement| RD
+    RD --> POL
+    CORE -->|fail-open / fail-closed decision, per route| DEG
 ```
 
 Interviewer: Explain the three tiers and why you ordered them that way.
@@ -344,3 +318,19 @@ Candidate: Study separately: [[overload-protection|Overload Protection]] — whe
 Candidate: Study separately: [[sli-slo-sla|SLI / SLO / SLA]] — how to state "low single-digit milliseconds decision latency" as a measurable SLO with an error budget, rather than as an aspiration.
 
 Candidate: Study separately: [[retry-and-timeout|Retry and Timeout]] — the interaction between timeouts, retries, and the 5-millisecond hard limit, since a retry inside the limiter is what turns a slow backend into an outage.
+
+---
+
+## What I Must Know
+
+### Must Know
+- [[rate-limiter|Rate Limiter]]
+- [[redis|Redis]]
+- [[distributed-rate-limiter|Distributed Rate Limiter]]
+- [[overload-protection|Overload Protection]]
+
+### Good to Understand
+- [[clocks-and-ordering|Clocks and Ordering]]
+- [[distributed-locks|Distributed Locks]]
+- [[circuit-breaker|Circuit Breaker]]
+- [[load-shedding|Load Shedding]]

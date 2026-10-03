@@ -70,59 +70,42 @@ Interviewer: Draw it. Whiteboard, keep it simple.
 
 Candidate: Four planes. A write plane, a fanout plane, a read plane, and a ranking plane.
 
-```text
-                              WRITE PLANE
-  +----------+    POST /v1/posts     +------------------+
-  |  Client  | --------------------> |  Post Service    |
-  |  (app)   | <--- 201 + post_id --- |  (stateless)     |
-  +----------+                       +--------+---------+
-                                               |
-                          +--------------------+--------------------+
-                          |                                         |
-                 sync write (durable)                    async publish (event)
-                          |                                         |
-                 +--------v---------+                  +--------------v--------------+
-                 |  Post DB (MySQL) |                  |   Event Bus (Kafka)       |
-                 |  PRIMARY         |                  |   topic: post.created       |
-                 |  + 2 replicas    |                  +--------------+--------------+
-                 |  shard by post_id|                                 |
-                 +------------------+                  +--------------v--------------+
-                                                           |  Fanout Service           |
-                +--------------------------------------+    |  (partitioned by user)   |
-                |                                      |    +-------------------------+
-                |  Social Graph DB                     |           |
-                |  follows(from,to) PRIMARY            |           v
-                |  shard by "from" (the follower)      |   +-------------------+
-                |  read path: "who does X follow"      |   |  Feed Store        |
-                +--------------------------------------+   |  wide-column /     |
-                                                           |  document,         |
-                                                           |  ordered by score  |
-                +--------------------------------------+   +---------+---------+
-                |  Media: object store + CDN           |             |
-                |  (referenced by opaque media_id)     |             v
-                +--------------------------------------+   +---------------------+
-                                                                   |
-                              READ PLANE                            | async pull path
-  +----------+   GET /v1/feed?cursor=...   +----------------+        |
-  |  Client  | -------------------------> |   Feed API     |        |
-  |          | <-- 200 + 20 items --------|  (thin, BFF)   |        |
-  +----------+                            +-------+--------+        |
-                                                   |                 |
-                                         +---------+---------+       |
-                                         |                   |       |
-                                  cache hit           cache miss ----+
-                                         |                   |
-                            +------------v------+   +--------v-----------+
-                            |  Redis Cluster   |   |  Ranker +          |
-                            |  zset per user   |   |  Feed Assembler    |
-                            |  (feed cache)    |   |  merges pull+push   |
-                            |  ~6 TB, 100 nodes|   +--------+-----------+
-                            +-------------------+            |
-                                                     +--------v-----------+
-                                                     |  Pull Store       |
-                                                     |  recent posts by  |
-                                                     |  followed user    |
-                                                     +--------------------+
+```mermaid
+flowchart TD
+    CL[Client app]
+    PS[Post Service<br/>stateless]
+    PDB[Post DB MySQL<br/>PRIMARY + 2 replicas<br/>shard by post_id]
+    EB[Event Bus Kafka<br/>topic: post.created]
+    FO[Fanout Service<br/>partitioned by user]
+    FS[Feed Store<br/>wide-column / document<br/>ordered by score]
+    SG[Social Graph DB<br/>follows(from,to) PRIMARY<br/>shard by "from" the follower<br/>read: who does X follow]
+    MD[Media: object store + CDN<br/>referenced by opaque media_id]
+
+    CL -->|POST /v1/posts| PS
+    PS -->|201 + post_id| CL
+    PS -->|sync write durable| PDB
+    PS -->|async publish event| EB
+    EB --> FO
+    FO -->|writes| FS
+    SG --> FO
+    MD --> PS
+```
+
+```mermaid
+flowchart TD
+    RC[Client]
+    FA[Feed API<br/>thin, BFF]
+    RD[Redis Cluster<br/>zset per user feed cache<br/>~6 TB, 100 nodes]
+    RK[Ranker + Feed Assembler<br/>merges pull + push]
+    PS2[Pull Store<br/>recent posts by<br/>followed user]
+    FS2[Feed Store<br/>async pull path]
+
+    RC -->|GET /v1/feed?cursor| FA
+    FA -->|cache hit| RD
+    FA -->|cache miss| RK
+    RD -->|items| FA
+    RK --> PS2
+    FS2 -->|async pull path| RK
 ```
 
 Candidate: Let me walk the four paths.
@@ -482,3 +465,19 @@ Interviewer: That's a good answer. We're out of time. Thanks.
 - Failure scenarios: consumer rebalance, Redis master loss, ranking bug, viral delete, scraping
 - Follow-ups: traffic doubling, primary death, hot key, why not Cassandra, replica lag, cache stampede, cold start, inactive user, ranking justification
 - Final summary: three-part close
+
+---
+
+## What I Must Know
+
+### Must Know
+- [[fanout-and-aggregation|Fan-Out and Aggregation]]
+- [[caching|Caching]]
+- [[hotspot-handling|Hotspot Handling]]
+- [[pagination|Pagination]]
+
+### Good to Understand
+- [[shard-key|Shard Key]]
+- [[replication-lag|Replication Lag]]
+- [[search-ranking|Search Ranking]]
+- [[event-sourcing-cqrs|Event Sourcing and CQRS]]

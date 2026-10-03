@@ -184,46 +184,39 @@ POST /v1/uploads/{uploadId}/complete
 
 Now the architecture.
 
-```text
-                        +-------------------------------+
-                        |         Desktop / Mobile       |
-                        |   chunker, hasher, sync engine |
-                        +--------+-------------+--------+
-                                 |             |
-                    control API   |             |  data plane (direct,
-                    (small reqs) |             |  signed, resumable)
-                                 v             v
-              +---------------------------------------------+
-              |            Edge / API Gateway              |
-              |   auth, rate limit, request id, LB        |
-              +---+------------------+------------------+---+
-                  |                  |                  |
-        +---------v--------+  +------v-------+  +-------v----------+
-        | Metadata Service |  |  Chunk Index |  |  Upload Session  |
-        | (stateless, many |  |  (in-memory  |  |  Tracker         |
-        |  replicas)       |  |   + Bloom)   |  |  (state machine) |
-        +---------+---------+  +------+-------+  +------------------+
-                  |                   |
-        +---------v---------+  +------v-------------------+
-        |  Metadata Store   |  |  Chunk Placement / Quorum  |
-        |  sharded RDBMS,   |  +---------+-------------------+
-        |  user_id shard,   |            |
-        |  3 replicas/AZ    |     +------v-----------------------+
-        +-------------------+     |  Chunk Storage Cluster      |
-                                  |  append-only per node,      |
-                                  |  fsync'd WAL, 3x replica   |
-                                  |  RF3 hot / 8+3 EC cold      |
-                                  +------+---------------------+
-                                         |
-                                  +------v---------------------+
-                                  |  Garbage Collector          |
-                                  |  mark-sweep + refcount      |
-                                  +----------------------------+
+```mermaid
+flowchart TD
+    D[Desktop / Mobile<br/>chunker, hasher, sync engine]
+    E[Edge / API Gateway<br/>auth, rate limit, request id, LB]
+    META[Metadata Service<br/>stateless, many replicas]
+    CI[Chunk Index<br/>in-memory + Bloom]
+    UP[Upload Session Tracker<br/>state machine]
+    MSTORE[Metadata Store<br/>sharded RDBMS, user_id shard<br/>3 replicas / AZ]
+    CPQ[Chunk Placement / Quorum]
+    CS[Chunk Storage Cluster<br/>append-only per node, fsync'd WAL<br/>3x replica, RF3 hot / 8+3 EC cold]
+    GC[Garbage Collector<br/>mark-sweep + refcount]
 
-        DOWNLOAD PATH (separate, cache-heavy)
+    D -->|control API, small reqs| E
+    D -->|data plane, direct / signed / resumable| E
+    E --> META
+    E --> CI
+    E --> UP
+    META --> MSTORE
+    CI --> CPQ
+    CPQ --> CS
+    CS --> GC
+```
 
-   client --> Edge --> CDN edge cache  ---- hit ---->  client   (95% of bytes)
-                   --> Origin shield --> Chunk Cache --> Chunk Nodes --> storage
+DOWNLOAD PATH (separate, cache-heavy)
+
+```mermaid
+flowchart TD
+    DC[Client] --> DE[Edge]
+    DE -->|hit: 95% of bytes| DN1[Client]
+    DE --> DOS[Origin shield]
+    DOS --> DCC[Chunk Cache]
+    DCC --> DCN[Chunk Nodes]
+    DCN --> DS[Storage]
 ```
 
 **Interviewer:** Two things jump out. First, why does the client talk to storage nodes directly instead of everything going through your services?
@@ -528,3 +521,19 @@ The three trade-offs I accepted. Single-writer metadata means a shard-level writ
 - [[soft-delete-audit-tables|Soft Delete and Audit Tables]] - trash, retention, and legal hold
 - [[caching|Caching]] - negative caching and Bloom filter sizing
 - [[distributed-locks|Distributed Locks]] - when a mutex is safe and when it is a liability
+
+---
+
+## What I Must Know
+
+### Must Know
+- [[erasure-coding|Erasure Coding]]
+- [[chunking-and-uploads|Chunking and Resumable Uploads]]
+- [[content-addressable-storage|Content-Addressable Storage]]
+- [[distributed-locks|Distributed Locks]]
+
+### Good to Understand
+- [[consistent-hashing|Consistent Hashing]]
+- [[storage-tiering|Storage Tiering]]
+- [[rpo-rto|RPO and RTO]]
+- [[crdt|CRDTs]]

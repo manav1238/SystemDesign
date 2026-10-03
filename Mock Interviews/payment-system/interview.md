@@ -352,71 +352,60 @@ Interviewer: Draw it.
 
 Candidate: Here is the whole system. I will walk it top to bottom, then zoom into the write path.
 
+```mermaid
+flowchart TD
+    CL[Mobile / Web Client<br/>tokens, no PAN, no card]
+    EDGE[EDGE: CDN -> WAF -> API Gateway<br/>TLS termination, OAuth / JWT validation<br/>per-merchant rate limit, request signing]
+    PAY[Payment API]
+    WAL[Wallet Service]
+    MPB[Merchant Portal BFF]
+    WH[Webhook Hub<br/>delivery + logs]
+    ORC[Payment Orchestrator<br/>state machine]
+    FRAUD[Fraud Worker<br/>async scoring]
+    RISK[Feature / Risk Store<br/>300ms SLA]
+    PSP[External PSP<br/>+ 3-D Secure]
+    PDB[PAYMENT DB clustered OLTP<br/>sharded by payer_id<br/>payments | payment_events append-only<br/>idempotency_keys | ledger_entries append-only<br/>outbox_events | refund_allocations<br/>settlement_batches]
+    BAL[Balance / Statement<br/>Read Model async, rebuild]
+    BROKER[Message Broker<br/>Kafka / SQS partitioned, replayable]
+    OWD[Outbound Webhook Dispatchers<br/>per-endpoint, DLQ, breaker]
+
+    CL -->|HTTPS, Idempotency-Key| EDGE
+    EDGE --> PAY
+    EDGE --> WAL
+    EDGE --> MPB
+    EDGE --> WH
+    PAY --> ORC
+    WAL --> ORC
+    ORC --> FRAUD
+    FRAUD --> RISK
+    ORC --> PSP
+    ORC -->|ONE ATOMIC TRANSACTION, same shard same DB| PDB
+    PDB -->|durable append| BAL
+    PDB -->|outbox relay polls| BROKER
+    WH -->|retry + backoff| OWD
+    OWD --> PSP
+    BROKER --> AN[Analytics / warehouse]
+    BROKER --> NO[Notif / SMTP]
+    BROKER --> FDD[Fraud decision]
+    BROKER --> WFO[Webhook fanout]
+    BROKER --> RC[Recon trigger]
+```
+
+SEPARATE STORAGE LANES
+
+```mermaid
+flowchart TD
+    A[Archive / WORM Object<br/>90d+ events, 7y retention]
+    P[PSP Statement Files S3 -> batch matcher]
+    M[Merchant Reports<br/>Parquet -> signed]
+```
+
+ASYNC EDGE PATHS (not on the synchronous path)
+
 ```text
-                          +--------------------------+
-                          |   Mobile / Web Client    |
-                          |  tokens, no PAN, no card |
-                          +------------+-------------+
-                                       | HTTPS
-                                       | Idempotency-Key
-                                       v
-+------------------------------------------------------------------------------------+
-|  EDGE:  CDN -> WAF -> API Gateway                                                  |
-|  TLS termination, OAuth/JWT validation, per-merchant rate limit, request signing   |
-+---+------------------+-------------------+--------------------+------------------+
-    |                  |                   |                    |
-    v                  v                   v                    v
-+-----------+  +--------------+   +---------------+    +------------------+
-| Payment   |  | Wallet       |   | Merchant      |    | Webhook Hub      |
-| API       |  | Service      |   | Portal (BFF)  |    | delivery + logs  |
-+-----+-----+  +------+-------+   +---------------+    +--------+---------+
-      |                |                                     |
-      |     +----------+                                     | retry + backoff
-      v     v                                                v
-+--------+---+  +------------------+          +-------------------------------+
-| Payment     |  | Fraud Worker    |          | Outbound Webhook Dispatchers   |
-| Orchestrator|--| async scoring   |          | per-endpoint, DLQ, breaker   |
-| state machine|  +--------+---------+          +---------------+---------------+
-+---+-----+---+           |                                    |
-    |     |               |                                    |
-    |     |               v                                    v
-    |     |     +------------------+            +-------------------+
-    |     |     | Feature/Risk     |            | External PSP      |
-    |     |     | Store (300ms SLA)|            | + 3-D Secure      |
-    |     |     +------------------+            +-------------------+
-    |     |
-    |     |  ONE ATOMIC TRANSACTION (same shard, same DB)
-    |     v
-    |  +--------------------------------------------------------------+
-    |  |  PAYMENT DB  (clustered OLTP, sharded by payer_id)          |
-    |  |    payments | payment_events(append-only) | idempotency_keys |
-    |  |    ledger_entries(append-only, double-entry)                 |
-    |  |    outbox_events | refund_allocations | settlement_batches  |
-    |  +----+----------------------------+---------------------------+
-    |       | durable append              | outbox relay polls
-    |       v                             v
-    |  +------------------+     +------------------------------+
-    |  | Balance /        |     |  Message Broker (Kafka / SQS) |
-    |  | Statement        |     |  partitioned, replayable    |
-    |  | Read Model       |     +---+---+---+---+---+----+-----+
-    |  | (async, rebuild) |         |   |   |   |   |    |
-    +--+------------------+         |   |   |   |   |    |
-       |                            v   v   v   v   v    v
-       |            +---------+ +--------+ +--------+ +--------+ +--------+
-       +----------->| Analytics| | Notif. | | Fraud  | |Webhook | | Recon  |
-                    | (warehouse)| | (SMTP) | | decision| | fanout | | trigger|
-                    +-----------+ +--------+ +--------+ +--------+ +--------+
-
-  SEPARATE STORAGE LANES
-  +---------------------------+   +---------------------------+   +--------------------+
-  | Archive / WORM Object     |   | PSP Statement Files       |   | Merchant Reports    |
-  | 90d+ events, 7y retention |   | (S3) -> batch matcher     |   | (Parquet -> signed)  |
-  +---------------------------+   +---------------------------+   +--------------------+
-
-  ASYNC EDGE PATHS (not on the synchronous path)
-  PSP --webhook--> Ingress --> verify signature --> dedupe --> queue --> orchestrator
-  Orchestrator --outbound--> PSP adapter (timeout 8s, circuit breaker, PSP idempotency key)
-  Unresolved payments (>15m) --> Resolver poller --> PSP status API
+PSP --webhook--> Ingress --> verify signature --> dedupe --> queue --> orchestrator
+Orchestrator --outbound--> PSP adapter (timeout 8s, circuit breaker, PSP idempotency key)
+Unresolved payments (>15m) --> Resolver poller --> PSP status API
 ```
 
 Candidate: Nine components plus four storage lanes. Let me name them so the diagram is not decorative: Payment API, Wallet Service, Merchant Portal BFF, Webhook Hub, Payment Orchestrator, Fraud Worker, Ledger and Payment DB with a materialized read model, Message Broker, and the async resolver. Behind that, the archive, the PSP statement files, and the reconciliation job.
@@ -1005,3 +994,19 @@ Study separately: [[idempotency|Idempotency and Idempotency Keys]]
 Study separately: [[idempotent-retry|Idempotent Retry]]
 Study separately: [[oltp-vs-olap|OLTP vs OLAP Separation]]
 Study separately: [[storage-tiering|Storage Tiering]]
+
+---
+
+## What I Must Know
+
+### Must Know
+- [[idempotency|Idempotency]]
+- [[outbox-pattern|Outbox Pattern]]
+- [[exactly-once-effect|Exactly-Once Effect]]
+- [[distributed-transactions|Distributed Transactions]]
+
+### Good to Understand
+- [[saga-and-strangler|Saga and Strangler Fig]]
+- [[retry-and-timeout|Retry and Timeout]]
+- [[request-deduplication|Request Deduplication]]
+- [[event-sourcing-cqrs|Event Sourcing and CQRS]]

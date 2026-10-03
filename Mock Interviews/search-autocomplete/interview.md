@@ -66,106 +66,58 @@ Interviewer: Draw the system. I want to see the offline and the online halves.
 
 Candidate: Two halves. Offline builds, online serves. The online half is aggressively simple because it has to be.
 
-```text
-=========================== OFFLINE / BUILD PIPELINE ===========================
+```mermaid
+flowchart TD
+    CE[Client query events]
+    QL[Query log<br/>Kafka, 3x AZ]
+    STR[Stream: raw queries, 1000/s]
+    FSA[Filter + sanitize<br/>dedupe, blocklist]
+    BT[Batch: hourly / daily<br/>MapReduce / Spark]
+    SW[Stream: rolling windows<br/>5m, 1h, 24h, 7d, in-memory]
+    CS[Count store<br/>count-min sketch / exact top-K<br/>heavy hitters per prefix]
+    TB[Trie builder<br/>top-N per prefix, per locale, per vertical]
+    SS[Snapshot store<br/>versioned artifacts in wide-column store]
+    PJ[Personalization batch job<br/>last 90 days]
+    VQ[Per-user recent query history<br/>in user store]
 
-  +----------------+   +----------------+   +------------------+
-  | Client query   |-->| Query log      |-->| Stream: raw      |
-  | events         |   | (Kafka, 3x AZ) |   | queries, 1000/s  |
-  +----------------+   +--------+-------+   +--------+---------+
-                              |                        |
-                              |                        v
-                              |              +-------------------+
-                              |              | Filter + sanitize |
-                              |              | dedupe, blocklist |
-                              |              +--------+----------+
-                              |                       |
-                              |        +--------------+--------------+
-                              |        |                             |
-                              |        v                             v
-                              |  +--------------+           +------------------+
-                              |  | Batch:       |           | Stream:          |
-                              |  | hourly/daily |           | rolling windows  |
-                              |  | MapReduce /  |           | 5m,1h,24h,7d    |
-                              |  | Spark        |           | in-memory state  |
-                              |  +------+-------+           +--------+---------+
-                              |         |                            |
-                              |         +-------------+--------------+
-                              |                       |
-                              |                       v
-                              |            +---------------------+
-                              |            | Count store         |
-                              |            | count-min sketch /   |
-                              |            | exact top-K (heavy   |
-                              |            | hitters) per prefix |
-                              |            +----------+----------+
-                              |                       |
-                              |                       v
-                              |            +---------------------+
-                              |            | Trie builder         |
-                              |            | top-N per prefix,    |
-                              |            | per locale, per      |
-                              |            | vertical            |
-                              |            +----------+----------+
-                              |                       |
-                              |                       v
-                              |            +---------------------+
-                              |            | Snapshot store       |
-                              |            | versioned artifacts |
-                              |            | in wide-column store |
-                              |            +----------+----------+
-                              |                       |
-       ========== publish new version + atomically swap ==========
-                              |
-                              v
-  +----------------------+                     +-------------------+
-  |  Personalization     |  per-user            |  Per-user recent  |
-  |  batch job           |-------------------->|  query history    |
-  |  last 90 days        |  top-50 prefixes     |  (in user store)  |
-  +----------------------+                     +-------------------+
+    CE --> QL
+    QL --> STR
+    STR --> FSA
+    FSA --> BT
+    FSA --> SW
+    BT --> CS
+    SW --> CS
+    CS --> TB
+    TB --> SS
+    PJ -->|per-user top-50 prefixes| VQ
+```
 
-============================= ONLINE / SERVING ================================
+ONLINE / SERVING
 
-   keystroke
-       |
-       v
-  [ Client: debounce 150ms, prefix-length gate, cache LRU 50 ]
-       |
-       |  GET /v1/suggest?q=iph&limit=10&locale=en-US&vertical=products
-       v
-  +------------------+     anycast / geo
-  |  Edge POP        |-----------------------------------------------+
-  |  + local cache   |                                               |
-  +--------+---------+                                               |
-           | miss                                                      |
-           v                                                           |
-  +------------------+   HIT   +--------------------------------+      |
-  |  Serving tier    |<---------|  L1: in-process trie shard  |      |
-  |  (stateless,     |          |  compact double-array,      |------+
-  |   per region)    |          |  top-N children per node    |
-  +--------+---------+          +--------------------------------+
-           | MISS
-           v
-  +------------------+          +--------------------------------+
-  |  Aggregator      |--------->|  L2: memcached / Redis      |
-  |  merges tiers,   |          |  top-K per prefix, hot      |
-  |  blends personal |          |  prefixes, ~1 TB cluster    |
-  +--------+---------+          +--------------------------------+
-           | MISS (cold prefix / tail vocabulary)
-           v
-  +------------------+          +--------------------------------+
-  |  Tail lookup     |--------->|  L3: wide-column store      |
-  |  prefix scan,    |          |  1e9 queries, sharded by    |
-  |  top-K, bounded  |          |  query_hash, 150 GB on disk |
-  +--------+---------+          +--------------------------------+
-           |
-           v
-  +------------------+
-  |  Response: merge, dedupe, personal blend, safety re-check, top-10 |
-  +--------+---------+
-           |
-           v   200 OK, ~1 KB, X-Cache: L1|L2|L3
-        [ Client dropdown ]
+```mermaid
+flowchart TD
+    CL[Client: debounce 150ms,<br/>prefix-length gate,<br/>cache LRU 50]
+    EP[Edge POP<br/>+ local cache]
+    SV[Serving tier<br/>stateless, per region]
+    L1[L1: in-process trie shard<br/>compact double-array<br/>top-N children per node]
+    L2[L2: memcached / Redis<br/>top-K per prefix, hot prefixes<br/>~1 TB cluster]
+    AG[Aggregator<br/>merges tiers, blends personal]
+    TL[Tail lookup<br/>prefix scan, top-K, bounded]
+    L3[L3: wide-column store<br/>1e9 queries, sharded by query_hash<br/>150 GB on disk]
+    RSP[Response: merge, dedupe,<br/>personal blend, safety re-check, top-10]
+
+    CL -->|GET /v1/suggest| EP
+    EP -->|miss| SV
+    SV -->|HIT| L1
+    L1 --> SV
+    SV -->|MISS| AG
+    AG -->|HIT| L2
+    L2 --> AG
+    AG -->|MISS, cold prefix / tail vocabulary| TL
+    TL --> L3
+    TL --> AG
+    AG --> RSP
+    RSP -->|200 OK ~1 KB, X-Cache: L1/L2/L3| CL
 ```
 
 Candidate: Let me walk it.
@@ -485,3 +437,19 @@ Interviewer: Good. That's the time.
 - Failure scenarios: stream job death, undersized snapshot, hot trie shard, prefix enumeration, personalization outage, region loss, stale-while-revalidate scope
 - Follow-ups: why not Elasticsearch, why not on-the-fly LIKE, viral trend, edge placement, storage justification, non-Latin scripts, metrics, one-week priorities
 - Final summary: three-part close
+
+---
+
+## What I Must Know
+
+### Must Know
+- [[autocomplete|Autocomplete]]
+- [[probabilistic-data-structures|Probabilistic Data Structures]]
+- [[caching|Caching]]
+- [[memory-estimation|Memory Estimation]]
+
+### Good to Understand
+- [[mapreduce-lambda-kappa|MapReduce, Lambda, and Kappa]]
+- [[search-ranking|Search Ranking]]
+- [[edge-computing|Edge Computing]]
+- [[load-shedding|Load Shedding]]

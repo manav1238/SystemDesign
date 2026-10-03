@@ -224,45 +224,25 @@ state, and an object store for media.
 **Candidate:** Here is the picture.
 
 **Candidate:**
-```text
-                        +---------------------------+
-                        |        Clients           |
-                        |  mobile / web / desktop   |
-                        +-------------+-------------+
-                                      |
-                            TLS + WebSocket (persistent)
-                                      |
-                        +-------------v-------------+
-                        |  Gateway Tier  (stateless) |
-                        |  auth, socket map, fan-in  |
-                        |  ~62M concurrent conns     |
-                        +------+-------------+-------+
-                               |             |
-              +----------------+             +----------------+
-              |                                       |
-   +----------v-----------+                   +-----------v----------+
-   |  Chat Service        |                   |  Presence Service    |
-   |  (stateless, write)  |                   |  (stateless, RPC)    |
-   +----------+-----------+                   +-----------+----------+
-              |                                       |
-              |  MessageStore                        |  Redis presence
-              |  shard = conversation_id              |  TTL keys
-              |  append-only, 3 replicas              |
-              |                                       |
-              +----------------+----------------------+
-                               |
-                 +-------------v--------------+
-                 |   Fanout / Delivery Svc    |
-                 |   decides: online push?    |
-                 |   or store-for-later?      |
-                 +------+-------------+-------+
-                        |             |
-          +-------------v-+  +--------v-------------+
-          |  Message Queue|  |  Gateway nodes that |
-          |  (Kafka,      |  |  hold the recipient |
-          |   per-conv    |  |  sockets            |
-          |   ordering)   |  +---------------------+
-          +---------------+
+```mermaid
+flowchart TD
+    C[Clients<br/>mobile / web / desktop]
+    G[Gateway Tier<br/>stateless, auth, socket map, fan-in<br/>~62M concurrent conns]
+    CS[Chat Service<br/>stateless, write]
+    PS[Presence Service<br/>stateless, RPC]
+    MS[MessageStore<br/>shard = conversation_id<br/>append-only, 3 replicas]
+    FO[Fanout / Delivery Svc<br/>decides: online push?<br/>or store-for-later?]
+    MQ[Message Queue<br/>Kafka, per-conv ordering]
+    GN[Gateway nodes that<br/>hold the recipient sockets]
+
+    C -->|TLS + WebSocket persistent| G
+    G --> CS
+    G --> PS
+    CS --> MS
+    PS -->|Redis presence TTL keys| FO
+    MS --> FO
+    FO --> MQ
+    FO --> GN
 ```
 
 **Candidate:** The critical piece is that arrow from Chat Service to Fanout Service. Sending a
@@ -1043,3 +1023,19 @@ the system is read-dominated twenty to one and the hot conversation is the only 
 - [[strong-vs-eventual-consistency]] for the per-field staleness budget framing
 - Study separately: Push Notifications (APNs/FCM), E2E encryption, and mobile offline sync
   conflict resolution
+
+---
+
+## What I Must Know
+
+### Must Know
+- [[websockets|WebSockets]]
+- [[message-queue|Message Queue]]
+- [[delivery-semantics|Delivery Semantics]]
+- [[redis|Redis]]
+
+### Good to Understand
+- [[backpressure|Backpressure]]
+- [[consumer-lag|Consumer Lag]]
+- [[sticky-sessions|Sticky Sessions]]
+- [[database-replication|Database Replication]]

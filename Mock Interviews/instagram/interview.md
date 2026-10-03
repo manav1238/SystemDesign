@@ -1202,3 +1202,21 @@ hot creator is the hybrid threshold plus precomputed chunks, so five hundred
 million followers is one cache read rather than five hundred million writes.
 
 Interviewer: That is a good ninety seconds. Thank you.
+
+---
+
+## What I Must Know
+
+### Must Know
+- [[blob-storage|Blob Storage]]
+- [[cdn|CDN]]
+- [[media-processing|Media Processing Pipeline]]
+- [[fanout-and-aggregation|Fan-Out and Aggregation]]
+- [[caching|Caching]]
+
+### Good to Understand
+- [[sharding|Sharding]]
+- [[shard-rebalancing|Shard Rebalancing]]
+- [[message-queue|Message Queue]]
+- [[cache-warming|Cache Warming]]
+- [[encryption-and-keys|Encryption and Keys]]

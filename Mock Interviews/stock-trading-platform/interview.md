@@ -166,86 +166,54 @@ Every non-2xx has a machine-readable code, not prose, because the client has to 
 
 **Candidate:** Here it is. Two planes: the quote plane, which is read-heavy and lossy-tolerant, and the order plane, which is write-heavy and correctness-critical. Keeping them separate is the main structural decision.
 
-```text
- EXCHANGE FEEDS
-      |
-      v
- +------------------+     +-------------------+
- | Feed Handlers    | --> | Market Data       |
- | per exchange, HA |     | Normalizer        |
- +------------------+     +---------+---------+
-                                    | canonical quote
-                                    v
-                          +---------+---------+
-                          | quotes-by-symbol   |  (Kafka, key = symbol)
-                          | 256 partitions     |
-                          +----+------------+---+
-                               |            |
-                    +----------v---+   +----v---------------+
-                    | Quote Engine |   | Book Snapshotter    |
-                    | per-symbol   |   | every 1M events     |
-                    | partition    |   +----+-----------------+
-                    +------+-------+        |
-                           |                v
-                           |        +-------+-----------------+
-                           |        | Snapshots (book state)  |
-                           |        | compaction topic       |
-                           |        +-------------------------+
-                           v
-                    +------+-------------------------------+
-                    |        Quote Fanout Service            |
-                    |  subscribes quotes, maintains        |
-                    |  per-symbol subscriber sets,         |
-                    |  coalesces to <=20 msg/s/conn        |
-                    +-------------------+-------------------+
-                                        | binary frames
-            +------------------+--------+---------+------------------+
-            v                  v                  v                  v
-     +-------------+    +-------------+    +-------------+    +-------------+
-     | WS Gateway  |    | WS Gateway  |    | WS Gateway  |    | WS Gateway  |
-     | 30K conns   |    | 30K conns   |    | 30K conns   |    | 30K conns   |
-     +-------------+    +-------------+    +-------------+    +-------------+
-            40 gateways total, 1.2M concurrent connections
+```mermaid
+flowchart TD
+    EX[EXCHANGE FEEDS]
+    FH[Feed Handlers<br/>per exchange, HA]
+    MD[Market Data Normalizer]
+    QBS[quotes-by-symbol<br/>Kafka, key = symbol, 256 partitions]
+    QE[Quote Engine<br/>per-symbol partition]
+    BS[Book Snapshotter<br/>every 1M events]
+    SNAP[Snapshots: book state<br/>compaction topic]
+    QF[Quote Fanout Service<br/>subscribes quotes, per-symbol<br/>subscriber sets, coalesces <=20 msg/s/conn]
+    WG1[WS Gateway<br/>30K conns]
+    WG2[WS Gateway<br/>30K conns]
+    WG3[WS Gateway<br/>30K conns]
+    WG4[WS Gateway<br/>30K conns]
 
+    EX --> FH
+    FH --> MD
+    MD -->|canonical quote| QBS
+    QBS --> QE
+    QBS --> BS
+    BS --> SNAP
+    QE --> QF
+    QF -->|binary frames| WG1
+    QF --> WG2
+    QF --> WG3
+    QF --> WG4
+```
 
- ORDER PLANE
+40 gateways total, 1.2M concurrent connections
 
-  client
-    |
-    v
- +-------------------+
- | Order Service     |  auth, validate, IDEMPOTENCY KEY, risk
- | stateless, N pods |
- +---------+---------+
-           |  routed by hash(symbol)
-           v
- +---------+-------------------------------+
- |  Matching Engine  (per-symbol shard)   |
- |  single-threaded, in-memory            |
- |  price-time priority                   |
- |  local WAL -> replicated               |
- +---------+-------------------------------+
-           |  every state change, ordered
-           v
- +-----------------------------------------+
- | orders-by-symbol (Kafka, key = symbol)  |
- | RF=3, min.insync.replicas=2, acks=all  |
- +----+-----------------------+------------+
-      |                       |
-      v                       v
- +-----------+      +--------------------+
- | Client    |      | Persistence        |
- | notifier  |      | Kafka -> Parquet   |
- | (order    |      | (object storage)   |
- |  updates) |      +--------------------+
- +-----------+
-      |
-      v
- +---------------------------+
- | Accounts / Positions      |
- | sharded Postgres, RF=3    |
- | ledger of record           |
- +---------------------------+
+ORDER PLANE
+
+```mermaid
+flowchart TD
+    CL2[Client]
+    OS[Order Service<br/>auth, validate, IDEMPOTENCY KEY, risk<br/>stateless, N pods]
+    ME[Matching Engine per-symbol shard<br/>single-threaded, in-memory<br/>price-time priority<br/>local WAL -> replicated]
+    OBS[orders-by-symbol Kafka, key = symbol<br/>RF=3, min.insync.replicas=2, acks=all]
+    CN[Client notifier<br/>order updates]
+    PF[Persistence<br/>Kafka -> Parquet object storage]
+    AP[Accounts / Positions<br/>sharded Postgres, RF=3<br/>ledger of record]
+
+    CL2 --> OS
+    OS -->|routed by hash(symbol)| ME
+    ME -->|every state change, ordered| OBS
+    OBS --> CN
+    OBS --> PF
+    CN --> AP
 ```
 
 **Interviewer:** The quote plane and the order plane both touch the symbol. What stops them from disagreeing?
@@ -470,3 +438,19 @@ Three trade-offs I accepted. Single-threaded per symbol, so a symbol cannot be s
 - [[websockets|WebSockets]] - backpressure, heartbeats, and connection lifecycle at a million connections
 - [[distributed-locks|Distributed Locks]] - why I refused to use a lock in the order path
 - [[kafka-replication|Kafka Replication]] - ISR, `min.insync.replicas`, and catch-up behavior
+
+---
+
+## What I Must Know
+
+### Must Know
+- [[kafka-ordering|Kafka Ordering]]
+- [[exactly-once-effect|Exactly-Once Effect]]
+- [[event-sourcing-cqrs|Event Sourcing and CQRS]]
+- [[websockets|WebSockets]]
+
+### Good to Understand
+- [[split-brain|Split Brain]]
+- [[tail-latency|Tail Latency]]
+- [[raft-and-paxos|Raft and Paxos]]
+- [[outbox-pattern|Outbox Pattern]]

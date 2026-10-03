@@ -264,65 +264,49 @@ Interviewer: Draw it.
 
 Candidate: Here is the whole system, and I have drawn the timeline across the top because that is the story of this design.
 
+T-5min ------------------------------- T=0 ---------------------------> T+60s
+
+```mermaid
+flowchart TD
+    US[Users x 1,000,000]
+    CDN[CDN + EDGE<br/>static shell, seat map SVG, assets<br/>~95% of requests, no origin<br/>pre-warmed per-PoP cache for hot events<br/>STICKY SOLD OUT page terminates at edge]
+    WR[Waiting Room<br/>token bucket 2k/s in, 10min session]
+    AV[Availability Service<br/>Redis bitmap, fallback: DB<br/>aggregate count]
+    BK[Booking Service<br/>idempotency, hold state machine<br/>limits, saga]
+    PA[Payment Adapter]
+    RP[Reaper<br/>sweeper, expiry]
+
+    US -->|page shell, seat map, JS| CDN
+    CDN -->|page, 95% CDN hit| WR
+    CDN -->|GET /availability| AV
+    CDN -->|POST /holds, POST /queue/join| BK
+    BK --> PA
+    BK --> RP
+    PA -->|webhook from external PSP| RP
+
+    AV --> INV[INVENTORY CLUSTER<br/>one shard per event_id<br/>seats: row-level locked<br/>seat_holds: TTL, CAS-released<br/>bookings/tickets: UNIQUE event_id seat_id<br/>outbox_events: atomic with everything]
+    RP --> INV
+    PA --> INV
+    INV -->|outbox relay| MB[MESSAGE BROKER<br/>key = event_id]
+    MB --> AP[Availability Projection<br/>-> Redis bitmap]
+    MB --> TI[Ticket issuance<br/>PDF, wallet]
+    MB --> NO[Email / push notif]
+    MB --> AN[Analytics<br/>warehouse]
+```
+
+CONTROL PLANE (off the data path, pre-authorised, audited)
+
 ```text
-        T-5min ------------------------------- T=0 --------------------------> T+60s
+kill switch (feature flag) | per-event rate limit | per-IP/account limiter
+bot detection | reaper schedule | capacity reconciliation | wait-room admission rate
+```
 
-  [Users x 1,000,000]
-          |
-          |  GET /events/evt_88213  (page shell, seat map, JS)
-          v
-  +----------------------------------------------------------------------+
-  |  CDN + EDGE                                                         |
-  |   - static shell, seat map SVG, assets: ~95% of requests, no origin |
-  |   - pre-warmed per-PoP cache for hot events                         |
-  |   - STICKY "SOLD OUT" page: terminates at edge, zero origin calls  |
-  +----+---------------------+----------------------+-----------------+
-       | page                | GET /availability    | POST /holds
-       | (95% CDN hit)       |                      | POST /queue/join
-       v                     v                      v
-  +----------+   +--------------------+   +---------------------------+
-  | Waiting  |   | Availability       |   |  Booking Service         |
-  | Room     |   | Service            |   |  idempotency, hold state |
-  |          |   |  Redis bitmap      |   |  machine, limits, saga  |
-  | token    |   |  fallback: DB      |   +----+--------------+--------+
-  | bucket   |   |  aggregate count   |        |              |
-  | 2k/s in  |   +---------+----------+        v              v
-  | 10min    |             |            +-----------+  +-------------+
-  | session  |             |            |  Payment  |  |  Reaper     |
-  +----------+             |            |  Adapter  |  |  sweeper    |
-                           |            +-----+-----+  |  (expiry)  |
-                           |                  |        +------+------+
-                           |          webhook from        |
-                           |          external PSP         |
-                           v                              v
-                    +------------------------------------------------+
-                    |  INVENTORY CLUSTER  (one shard per event_id)   |
-                    |    seats            (row-level locked)         |
-                    |    seat_holds       (TTL, CAS-released)         |
-                    |    bookings/tickets (UNIQUE event_id, seat_id)  |
-                    |    outbox_events    (atomic with everything)    |
-                    +-------------------------+----------------------+
-                                              | outbox relay
-                                              v
-                    +------------------------------------------------+
-                    |  MESSAGE BROKER  (key = event_id)              |
-                    +---+-------------+-------------+------------+---+
-                        v             v             v            v
-              +---------------+ +-----------+ +------------+ +---------+
-              | Availability  | | Ticket    | | Email /    | | Analytics|
-              | Projection    | | issuance  | | push notif | |(warehouse)|
-              | -> Redis      | | (PDF,     | +------------+ +---------+
-              |    bitmap     | |  wallet)  |
-              +---------------+ +-----------+
+FAILURE POSTURES
 
-  CONTROL PLANE (off the data path, pre-authorised, audited):
-    kill switch (feature flag) | per-event rate limit | per-IP/account limiter
-    bot detection | reaper schedule | capacity reconciliation | wait-room admission rate
-
-  FAILURE POSTURES
-    Inventory DB unreachable  -> FAIL CLOSED, refuse holds. Never fail open.
-    Redis unavailable         -> availability degrades to DB aggregate; booking unaffected
-    Broker unavailable        -> outbox accumulates; ticketing/email delayed, holds expire on time
+```text
+Inventory DB unreachable  -> FAIL CLOSED, refuse holds. Never fail open.
+Redis unavailable         -> availability degrades to DB aggregate; booking unaffected
+Broker unavailable        -> outbox accumulates; ticketing/email delayed, holds expire on time
 ```
 
 Candidate: Nine components. Availability Service, Waiting Room, Booking Service, Payment Adapter, Reaper, Inventory cluster, Message Broker, Availability Projection, and Ticketing.
@@ -841,3 +825,19 @@ Study separately: [[shard-key|Shard Key]]
 Study separately: [[probabilistic-data-structures|Bitmaps and Probabilistic Structures]]
 Study separately: [[feature-flags|Feature Flags]]
 Study separately: [[consumer-lag|Consumer Lag]]
+
+---
+
+## What I Must Know
+
+### Must Know
+- [[database-locking|Database Locking]]
+- [[isolation-levels|Isolation Levels]]
+- [[distributed-locks|Distributed Locks]]
+- [[idempotency|Idempotency]]
+
+### Good to Understand
+- [[load-shedding|Load Shedding]]
+- [[backpressure|Backpressure]]
+- [[request-deduplication|Request Deduplication]]
+- [[exactly-once-effect|Exactly-Once Effect]]

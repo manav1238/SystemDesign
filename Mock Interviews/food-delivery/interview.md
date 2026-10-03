@@ -364,56 +364,58 @@ Interviewer: Draw the architecture.
 
 Candidate: Here is the whole system, and I have deliberately drawn the three client-facing tiers as three separate boxes because that is the first decision I argued for.
 
-```
-   CUSTOMER APP                 RESTAURANT APP              PARTNER APP
-  (browse/cart/track)            (menu/queue)                (offers/nav)
-        |                             |                          |
-   +----v-----+                  +----v-----+                +----v-----+
-   | Customer |                  |Restaurant|                | Partner  |
-   |   BFF    |                  |   BFF    |                |   BFF    |
-   +----+-----+                  +----+-----+                +----+-----+
-        |                             |                          |
-   +----v-----+   +-------------+  +--v-----+  +------------+ +--v-----+
-   | Catalog  |   |  Search     |  | Menu   |  | Order      | | Earnings|
-   | Service  |   |  Service    |  | Service|  | Service    | | Service |
-   | (CDN+    |   | (geo+rank)  |  |        |  | STATE MCHN | |         |
-   |  cache)  |   +-------------+  +--------+  | strong,    | +---------+
-   +----+-----+                              | 256 shards  |
-        |                                    +------+------+
-        |                                           |
-        |            +-------------------+           |  every state change
-        |            | Payment Service   |           |  appends order_events
-        |            | auth / capture /  |           |  in the SAME tx
-        |            | void / refund     |           |
-        |            | circuit breaker   |           |
-        |            +---------+---------+           |
-        |                      |                     |
-        |            +---------v---------+           |
-        |            |  LEDGER (double  |           |
-        |            |  entry, separate |           |
-        |            |  store)          |           |
-        |            +------------------+           |
-        |                                             |
-        |  +--------+                        +--------v-------+
-        +->|  CDN   |                        |  EVENT BUS     |
-           | (imgs,  |                        |  order-events  |
-           |  menus) |                        |  Kafka         |
-           +--------+                        +----+-------+----+
-                                                |       |       |
-              +---------------------------------+       |       +---------+
-              |                                         |                 |
-     +--------v------+   +-------------+        +-------v-------+ +-------v-------+
-     | INVENTORY     |   | DISPATCH    |        | NOTIFICATION  | | ANALYTICS     |
-     | holds +       |   | batch per   |        | svc: push,    | | consumer      |
-     | projection    |   | restaurant, |        | SMS, in-app   | | -> lake       |
-     +----------------+   | CAS claim   |        | idempotent    | +---------------+
-                           +-------------+        +---------------+
+```mermaid
+flowchart TD
+    CA[CUSTOMER APP<br/>browse / cart / track]
+    RA[RESTAURANT APP<br/>menu / queue]
+    PA[PARTNER APP<br/>offers / nav]
+    CB[Customer BFF]
+    RB[Restaurant BFF]
+    PB[Partner BFF]
+    CAT[Catalog Service<br/>CDN + cache]
+    SEA[Search Service<br/>geo + rank]
+    MENU[Menu Service]
+    ORD[Order Service<br/>STATE MCHN, strong, 256 shards]
+    EARN[Earnings Service]
+    PAY[Payment Service<br/>auth / capture / void / refund<br/>circuit breaker]
+    LED[LEDGER<br/>double entry, separate store]
+    CDN[CDN<br/>imgs, menus]
+    EB[EVENT BUS<br/>order-events Kafka]
 
-   LOCATION PLANE (shared)
-     partner app --WSS--> ingest (400K pings/s) --> Kafka --> geo index (in-memory, cell-keyed)
-                                                         \--> dispatch candidate queries
-   REALTIME PLANE (shared)
-     order events --> realtime gateway (1.2M msg/s) --> customer app WSS
+    CA --> CB
+    RA --> RB
+    PA --> PB
+    CB --> CAT
+    CB --> SEA
+    CB --> PAY
+    PAY --> LED
+    RB --> MENU
+    RB --> ORD
+    PB --> EARN
+    CAT --> CDN
+    ORD -->|every state change appends order_events in the SAME tx| EB
+    EB --> INV[INVENTORY<br/>holds + projection]
+    EB --> DIS[DISPATCH<br/>batch per restaurant, CAS claim]
+    EB --> NOT[NOTIFICATION SVC<br/>push, SMS, in-app, idempotent]
+    EB --> AN[ANALYTICS consumer<br/>-> lake]
+```
+
+LOCATION PLANE (shared)
+
+```mermaid
+flowchart TD
+    LPA[Partner App] -->|WSS| LI[Ingest<br/>400K pings/s]
+    LI --> LK[Kafka]
+    LK --> GEO[Geo index<br/>in-memory, cell-keyed]
+    LK --> DQ[Dispatch candidate queries]
+```
+
+REALTIME PLANE (shared)
+
+```mermaid
+flowchart TD
+    OE[Order events] --> RG[Realtime gateway<br/>1.2M msg/s]
+    RG -->|WSS| AP[Customer App]
 ```
 
 Candidate: The structural observation: there are four planes and they scale differently. The transactional plane is small and correctness-critical, 700 writes per second. The catalog plane is enormous and lossy, 18,000 reads per second that should be cache hits. The location plane is high-volume and lossy by design, 400,000 pings per second that nobody is waiting on. The realtime plane is the biggest number in the system, 1.2 million messages per second, and it is the only one a human is watching. Study separately: [[microservices|Microservices]] and [[cell-based-architecture|Cell-Based Architecture]].
@@ -546,57 +548,51 @@ Interviewer: Show me the order state machine. I want to know which transitions a
 
 Candidate: Here it is, and the branches on the right are the ones that have to exist before launch, not after the first incident.
 
-```
- ORDER
-  (none) -> DRAFT -> PAYMENT_PENDING -> PAYMENT_AUTHORIZED -> SUBMITTED
-             |            |                                        |
-             |            +-> PAYMENT_FAILED                       |  7 min timer
-             |            +-> PAYMENT_TIMEOUT (void, re-attempt)  +-> AUTO_REJECTED
-             |                                                      |   (void auth)
-             |                                                      +-> REJECTED_BY_RESTAURANT
-             |                                                      +-> CANCELLED_BY_CUSTOMER
-             |                                                      |   (void or fee)
-             |                                                      +-> RESTAURANT_OFFLINE
-             |                                                      |   (auto-reject)
-                                                                     v
-                            +-----------> ACCEPTED <-----------+
-                                             |                +-> CANCELLED_BY_RESTAURANT
-                                             v                |   (refund + penalty)
-                                      PREPARING --------------+
-                                             |
-                                             v
-                                    READY_FOR_PICKUP
-                                             |
-                       +---------------------+---------------------+
-                       v                                           v
-              PICKUP_EXPIRED (no partner)                 PICKUP_ASSIGNED
-                       |                                           |
-                       v                                           v
-                 CANCELLED_BY_SYSTEM                         PICKED_UP
-                 (refund, restock)                                |
-                                                                 v
-                                                        ON_THE_WAY
-                                                                 |
-                                                                 v
-                                                            DELIVERED
-                                                                 |
-                              +----------------------------------+------+
-                              v                                         v
-                          RATED                                   DISPUTED
-                        (terminal)                          (refund from ledger)
+```mermaid
+stateDiagram-v2
+    [*] --> DRAFT
+    DRAFT --> PAYMENT_PENDING
+    PAYMENT_PENDING --> PAYMENT_AUTHORIZED
+    PAYMENT_PENDING --> PAYMENT_FAILED
+    PAYMENT_PENDING --> PAYMENT_TIMEOUT: void, re-attempt
+    PAYMENT_AUTHORIZED --> SUBMITTED
+    SUBMITTED --> AUTO_REJECTED: 7 min timer, void auth
+    SUBMITTED --> REJECTED_BY_RESTAURANT
+    SUBMITTED --> CANCELLED_BY_CUSTOMER: void or fee
+    SUBMITTED --> RESTAURANT_OFFLINE: auto-reject
+    SUBMITTED --> ACCEPTED
+    ACCEPTED --> CANCELLED_BY_RESTAURANT: refund + penalty
+    ACCEPTED --> PREPARING
+    PREPARING --> READY_FOR_PICKUP
+    READY_FOR_PICKUP --> PICKUP_EXPIRED: no partner
+    READY_FOR_PICKUP --> PICKUP_ASSIGNED
+    PICKUP_EXPIRED --> CANCELLED_BY_SYSTEM: refund, restock
+    PICKUP_ASSIGNED --> PICKED_UP
+    PICKED_UP --> ON_THE_WAY
+    ON_THE_WAY --> DELIVERED
+    DELIVERED --> RATED: terminal
+    DELIVERED --> DISPUTED: refund from ledger
+    RATED --> [*]
 ```
 
 Candidate: Five rules that matter more than the diagram. One, `PAYMENT_AUTHORIZED` to `SUBMITTED` is one transaction, because the customer's money is authorized and the restaurant must be told atomically, otherwise a crash between them either takes an order nobody will cook or notifies a restaurant about an order with no money. Two, the 7-minute auto-reject timer is a server-side deadline evaluated from a stored `accept_deadline_at`, and it must be idempotent, so a duplicate timer fire produces the same void, not two. Three, `CANCELLED_BY_RESTAURANT` and `RESTAURANT_OFFLINE` are different statuses even though both refund, because operations and analytics need to tell a restaurant saying no apart from a restaurant that was down. Four, `RATED` is a separate machine, not a status, because a rating can be revised and a dispute can be opened days after delivery. Five, there is no path from `DELIVERED` back to anything except `DISPUTED`, and `DISPUTED` resolves to a refund transaction.
 
-```
- PARTNER (delivery) STATE MACHINE
-  OFFLINE -> IDLE -> OFFERED -> ASSIGNED -> PICKING_UP -> DELIVERING -> IDLE
-                    |   |          |            |              |
-                    |   +-> IDLE   |            |              +-> IDLE
-                    |      (declined / expired)
-                    +-> IDLE (customer cancelled before pickup)
-                               ASSIGNED --(60s no ping)--> IDLE + REASSIGN_TRIGGER
-  any -> SUSPENDED  (terminal pending appeal)
+```mermaid
+stateDiagram-v2
+    [*] --> OFFLINE
+    OFFLINE --> IDLE
+    IDLE --> OFFERED
+    OFFERED --> IDLE: declined / expired
+    OFFERED --> IDLE: customer cancelled before pickup
+    OFFERED --> ASSIGNED
+    ASSIGNED --> IDLE: 60s no ping -> REASSIGN_TRIGGER
+    ASSIGNED --> PICKING_UP
+    PICKING_UP --> DELIVERING
+    DELIVERING --> IDLE
+    ASSIGNED --> SUSPENDED
+    OFFERED --> SUSPENDED
+    * --> SUSPENDED
+    SUSPENDED: terminal pending appeal
 ```
 
 Candidate: The re-assign trigger is the interesting one. A partner whose app dies mid-delivery is detected by a heartbeat timeout, not by an event, so the system has to be willing to un-assign a partner who is physically holding the customer's food. That is a genuinely hard product case, and the answer is to reassign, tell the customer honestly, and start a 2-minute timer for a self-pickup fallback before refunding. Study separately: [[event-driven-architecture|Event Driven Architecture]] and [[heartbeat-health-checks|Heartbeat Health Checks]].
@@ -718,3 +714,19 @@ Interviewer: Good session. The authorize-versus-capture question at the top, and
 - Catalog caching and menu stampedes: [[caching|Caching]], [[cache-warming|Cache Warming]]
 - Delivery-radius geofencing and fee quoting: [[shard-routing|Shard Routing]], [[database-indexing|Database Indexing]]
 - Primary death, replica lag, and the reconciliation safety net: [[failover|Failover]], [[replication-lag|Replication Lag]], [[split-brain|Split Brain]]
+
+---
+
+## What I Must Know
+
+### Must Know
+- [[outbox-pattern|Outbox Pattern]]
+- [[idempotency|Idempotency]]
+- [[event-driven-architecture|Event-Driven Architecture]]
+- [[saga-and-strangler|Saga and Strangler Fig]]
+
+### Good to Understand
+- [[graceful-degradation|Graceful Degradation]]
+- [[distributed-scheduling|Distributed Scheduling]]
+- [[replication-lag|Replication Lag]]
+- [[raft-and-paxos|Raft and Paxos]]
