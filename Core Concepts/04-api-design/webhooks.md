@@ -34,17 +34,17 @@ Consumers poll every few minutes: event latency is bounded by the poll interval,
 
 ## 6. Important Terminology
 
-| Term | Simple Meaning |
-|------|----------------|
-| Webhook | HTTP callback URL receiving event POSTs |
-| Event | A notification that some domain thing happened |
-| Subscription | Consumer's chosen set of event types + URL |
-| Payload | The event body the provider delivers |
-| HMAC signature | Authentic hash of payload, keyed on a shared secret |
-| Retry / backoff | Provider re-sends failed deliveries, spaced out |
-| Dead-letter queue | Overflow for events that kept failing |
-| Idempotent consumer | Handler safe against receiving the same event twice |
-| Endpoint verification | Handshake proving the URL belongs to the consumer |
+| Term                  | Simple Meaning                                      |
+| --------------------- | --------------------------------------------------- |
+| Webhook               | HTTP callback URL receiving event POSTs             |
+| Event                 | A notification that some domain thing happened      |
+| Subscription          | Consumer's chosen set of event types + URL          |
+| Payload               | The event body the provider delivers                |
+| HMAC signature        | Authentic hash of payload, keyed on a shared secret |
+| Retry / backoff       | Provider re-sends failed deliveries, spaced out     |
+| Dead-letter queue     | Overflow for events that kept failing               |
+| Idempotent consumer   | Handler safe against receiving the same event twice |
+| Endpoint verification | Handshake proving the URL belongs to the consumer   |
 
 ## 7. Basic Architecture
 
