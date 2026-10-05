@@ -36,17 +36,17 @@ Without a standard protocol every client and server would need bespoke wire form
 
 ## 6. Important Terminology
 
-| Term | Simple Meaning |
-|------|----------------|
-| Method | GET/POST/PUT/PATCH/DELETE — verb the client wants |
-| Status code | 3-digit result: 2xx ok, 3xx redirect, 4xx client, 5xx server |
-| Header | Metadata (auth, content-type, cache-control, idempotency-key) |
-| Keep-alive | Reuse one TCP connection for many requests |
-| Multiplexing (HTTP/2) | Multiple parallel requests on one connection |
-| TLS handshake | Key exchange + identity check before encryption starts |
-| Session resumption | Skip some handshake steps for repeat visits |
-| Cookie | Small client-stored token sent on every request to that domain |
-| Idempotency-key | Client-provided ID so a retried request doesn't double-apply |
+| Term                  | Simple Meaning                                                 |
+| --------------------- | -------------------------------------------------------------- |
+| Method                | GET/POST/PUT/PATCH/DELETE — verb the client wants              |
+| Status code           | 3-digit result: 2xx ok, 3xx redirect, 4xx client, 5xx server   |
+| Header                | Metadata (auth, content-type, cache-control, idempotency-key)  |
+| Keep-alive            | Reuse one TCP connection for many requests                     |
+| Multiplexing (HTTP/2) | Multiple parallel requests on one connection                   |
+| TLS handshake         | Key exchange + identity check before encryption starts         |
+| Session resumption    | Skip some handshake steps for repeat visits                    |
+| Cookie                | Small client-stored token sent on every request to that domain |
+| Idempotency-key       | Client-provided ID so a retried request doesn't double-apply   |
 
 ## 7. Basic Architecture
 

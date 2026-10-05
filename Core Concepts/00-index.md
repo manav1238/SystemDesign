@@ -340,18 +340,18 @@ Comprehensive High-Level Design (HLD) / system-design knowledge base.
 ---
 ## 19 — Architecture Patterns [`Must Know · Important · Advanced`]
 
-| Concept | File | Status | Priority | Difficulty |
-|---------|------|--------|----------|------------|
-| Data Access Patterns | [data-patterns.md](19-architecture-patterns/data-patterns.md) | Learning | Must Know | Medium |
-| Fan-Out / Fan-In / Scatter-Gather | [fanout-and-aggregation.md](19-architecture-patterns/fanout-and-aggregation.md) | Learning | Important | Medium |
-| Hexagonal and Clean Architecture | [hexagonal-clean-architecture.md](19-architecture-patterns/hexagonal-clean-architecture.md) | Learning | Advanced | Hard |
-| Layered / N-Tier Architecture | [layered-architecture.md](19-architecture-patterns/layered-architecture.md) | Learning | Must Know | Easy |
-| Microservices | [microservices.md](19-architecture-patterns/microservices.md) | Learning | Must Know | Medium |
-| Modular Monolith | [modular-monolith.md](19-architecture-patterns/modular-monolith.md) | Learning | Important | Medium |
-| Monolith | [monolith.md](19-architecture-patterns/monolith.md) | Learning | Important | Easy |
-| Publisher-Subscriber Pattern | [pub-sub-pattern.md](19-architecture-patterns/pub-sub-pattern.md) | Learning | Must Know | Easy |
-| Resilience Patterns (Catalog) | [resilience-patterns.md](19-architecture-patterns/resilience-patterns.md) | Learning | Must Know | Medium |
-| Saga and Strangler Fig | [saga-and-strangler.md](19-architecture-patterns/saga-and-strangler.md) | Learning | Must Know | Medium |
+| Concept                           | File                                                                                        | Status   | Priority  | Difficulty |
+| --------------------------------- | ------------------------------------------------------------------------------------------- | -------- | --------- | ---------- |
+| Data Access Patterns              | [data-patterns.md](19-architecture-patterns/data-patterns.md)                               | Learning | Must Know | Medium     |
+| Fan-Out / Fan-In / Scatter-Gather | [fanout-and-aggregation.md](19-architecture-patterns/fanout-and-aggregation.md)             | Learning | Important | Medium     |
+| Hexagonal and Clean Architecture  | [hexagonal-clean-architecture.md](19-architecture-patterns/hexagonal-clean-architecture.md) | Learning | Advanced  | Hard       |
+| Layered / N-Tier Architecture     | [layered-architecture.md](19-architecture-patterns/layered-architecture.md)                 | Learning | Must Know | Easy       |
+| Microservices                     | [microservices.md](19-architecture-patterns/microservices.md)                               | Learning | Must Know | Medium     |
+| Modular Monolith                  | [modular-monolith.md](19-architecture-patterns/modular-monolith.md)                         | Learning | Important | Medium     |
+| Monolith                          | [monolith.md](19-architecture-patterns/monolith.md)                                         | Learning | Important | Easy       |
+| Publisher-Subscriber Pattern      | [pub-sub-pattern.md](19-architecture-patterns/pub-sub-pattern.md)                           | Learning | Must Know | Easy       |
+| Resilience Patterns (Catalog)     | [resilience-patterns.md](19-architecture-patterns/resilience-patterns.md)                   | Learning | Must Know | Medium     |
+| Saga and Strangler Fig            | [saga-and-strangler.md](19-architecture-patterns/saga-and-strangler.md)                     | Learning | Must Know | Medium     |
 | Multi-Tenancy and Cell-Based Architecture | [tenancy-and-cells.md](19-architecture-patterns/tenancy-and-cells.md) | Learning | Advanced | Hard |
 ---
 ## 20 — Multi-Region Systems [`Must Know · Important · Advanced`]
